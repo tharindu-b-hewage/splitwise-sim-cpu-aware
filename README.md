@@ -3,25 +3,25 @@
 SplitwiseSimCPUCarbon is a discreet event simulator that helps to evaluate CPU embodied carbon optimization in 
 LLM inference clusters through management of CPU aging. It was built by extending [SplitwiseSim](https://github.com/Mutinifni/splitwise-sim), an LLM serving cluster simulator.
 
-SplitwiseSimCPUCarbon also implements our research work of an efficient embodied carbon amortization technique for LLM 
+SplitwiseSimCPUCarbon also implements our research on an efficient embodied carbon amortization technique for LLM 
 inference clusters. It implements online algorithms of the proposed technique, comparison baselines, and evaluation.
 
 #### Setup
 
-We designed _splitwise-sim-cpu-carbon_ repository to reflect our extension on top of SplitwiseSim. You can follow the 
+We designed the _splitwise-sim-cpu-carbon_ repository to reflect our extension on top of SplitwiseSim. You can follow the 
 steps below to set up SplitwiseSimCPUCarbon accordingly.
 
-1. Checkout to the base SplitWiseSim code. For that, download the tag from 
+1. Check out the base SplitWiseSim code. For that, download the tag from 
 [https://github.com/tharindu-b-hewage/splitwise-sim/releases/tag/base-cpu-aging-aware](https://github.com/tharindu-b-hewage/splitwise-sim/releases/tag/base-cpu-aging-aware),
 or clone the forked repository [https://github.com/tharindu-b-hewage/splitwise-sim](https://github.com/tharindu-b-hewage/splitwise-sim) and checkout to the tag ```base-cpu-aging-aware```.
 2. Follow SplitwiseSim instructions to download inference trace data and run example simulation scenarios.
-3. Apply the patch: [extension/splitwise-sim.patch](extension/splitwise-sim.patch) which extends the base to ```SplitwiseSimCPUCarbon```.
+3. Apply the patch: [extension/splitwise-sim.patch](extension/splitwise-sim.patch), which extends the base to ```SplitwiseSimCPUCarbon```.
 
 #### Changes Introduced
 
 Below is a high-level summary of the new or modified functionality introduced with the patch. These changes primarily 
 focus on adding CPU modeling (including per-core allocation, C-State power/temperature modeling, and new scheduling
-algorithms) to manage silicon aging in CPU during LLM model serving.
+algorithms) to manage silicon aging in the CPU during LLM model serving.
 
 1. **CPU and Core Modeling**  
    - **Core Power & Residency Tracking**  
@@ -50,9 +50,9 @@ algorithms) to manage silicon aging in CPU during LLM model serving.
 
 4. **Simulator Hooks**  
    - **Periodic Sleep-Management**  
-     - When running the simulation with `proposed` CPU scheduling, the simulator periodically calls `cpu.adjust_sleeping_cores()` to execute ```Selective Core Idling``` algorithm in our proposed technique.
+     - When simulating with `proposed` CPU scheduling, the simulator periodically calls `cpu.adjust_sleeping_cores()` to execute ```Selective Core Idling``` algorithm in our proposed technique.
    - **CPU Core Usage Logs**  
-     - End-of-simulation triggers a final “state update” to log each core’s final status (frequency, temperature, etc.).
+     - End-of-simulation triggers a final “state update” to log each core’s status (frequency, temperature, etc.).
 
 5. **Plotting & Analysis Scripts**  
    - Several new Python files (`llm-ca_misc_plots.py`, `llm-ca_perf_metric_plots.py`, `llm-ca_plots_tasks-vs-time.py`) to:
@@ -71,16 +71,12 @@ in LLM inference clusters.
 
 #### Usage
 
-The ```run_cpu_experiments.sh``` script execute various configurations of inference traces, CPU management techniques, 
-and instance core counts to conduct multiple LLM service experiments. Make sure to change experiment data output folder 
-accordingly. Upon execution, you can refer to plotting and analysis scripts we mentioned in the section above. Modify 
-the script to point experiment data properly. These scripts generate CPU aging management and carbon optimization 
+The ```run_cpu_experiments.sh``` script executes various configurations of inference traces, CPU management techniques, 
+and instance core counts to conduct multiple LLM service experiments. Make sure to change the experiment data output folder 
+accordingly. Upon execution, you can refer to the plotting and analysis scripts mentioned in the above section. Modify 
+the script to point to experiment data properly. These scripts generate CPU aging management and carbon optimization 
 plots in the ```results_cpu``` folder.
 
 #### Reference
 
 If you use SplitwiseSimCPUCarbon in your work, please cite the accompanying paper:
-
-
-
-
