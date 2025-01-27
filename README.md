@@ -1,21 +1,21 @@
-### SplitwiseSimCPUAgingAware: Extended SplitwiseSim for CPU Aging-aware LLM Serving
+### SplitwiseSimCPUCarbon: Extended SplitwiseSim for Amortizing CPU Embodied Carbon in LLM Serving
 
-SplitwiseSimCPUAgingAware is a discreet event simulator that helps evaluating CPU aging-aware model serving in LLM
-inference clusters. It was built by extending SplitwiseSim, an LLM serving cluster simulator.
+SplitwiseSimCPUCarbon is a discreet event simulator that helps to evaluate CPU embodied carbon optimization in 
+LLM inference clusters through management of CPU aging. It was built by extending [SplitwiseSim](https://github.com/Mutinifni/splitwise-sim), an LLM serving cluster simulator.
 
-SplitwiseSimCPUAgingAware also implements our research work on mitigating embodied carbon in LLM inference clusters.
-It hosts implementation and evaluation of the aging-aware CPU management technique that we propose.
+SplitwiseSimCPUCarbon also implements our research work of an efficient embodied carbon amortization technique for LLM 
+inference clusters. It implements online algorithms of the proposed technique, comparison baselines, and evaluation.
 
 #### Setup
 
-We designed _splitwise-sim-cpu-aging-aware_ repository to focus on the CPU aging-aware extension. You can follow the 
-steps below to setup SplitwiseSimCPUAgingAware on top of the SplitWiseSim.
+We designed _splitwise-sim-cpu-carbon_ repository to reflect our extension on top of SplitwiseSim. You can follow the 
+steps below to set up SplitwiseSimCPUCarbon accordingly.
 
 1. Checkout to the base SplitWiseSim code. For that, download the tag from 
 [https://github.com/tharindu-b-hewage/splitwise-sim/releases/tag/base-cpu-aging-aware](https://github.com/tharindu-b-hewage/splitwise-sim/releases/tag/base-cpu-aging-aware),
 or clone the forked repository [https://github.com/tharindu-b-hewage/splitwise-sim](https://github.com/tharindu-b-hewage/splitwise-sim) and checkout to the tag ```base-cpu-aging-aware```.
-2. Follow SplitwiseSim instructions to download traces and run example simulation scenarios.
-3. Apply the patch: [extension/splitwise-sim.patch](extension/splitwise-sim.patch) which extends the base to ```SplitwiseSimCPUAgingAware```.
+2. Follow SplitwiseSim instructions to download inference trace data and run example simulation scenarios.
+3. Apply the patch: [extension/splitwise-sim.patch](extension/splitwise-sim.patch) which extends the base to ```SplitwiseSimCPUCarbon```.
 
 #### Changes Introduced
 
@@ -65,19 +65,21 @@ algorithms) to manage silicon aging in CPU during LLM model serving.
    - **Refined “splitwise” Scripts**  
      - Extended scripts (`run_splitwise_ha_cpu.sh`, etc.) configure cluster servers to include CPUs alongside GPUs, enabling CPU-based overhead.
 
-Overall, these modifications integrate a rudimentary but flexible CPU model into the simulator, allowing fine-grained exploration of CPU aging through CPU overhead, power states, core-level scheduling, and the interplay between CPU and GPU resources in LLM inference clusters.
+Overall, these modifications integrate an aging-aware CPU model into the simulator, allowing fine-grained exploration 
+of CPU aging through CPU overhead, power states, core-level scheduling, and the interplay between CPU and GPU resources 
+in LLM inference clusters.
 
 #### Usage
 
 The ```run_cpu_experiments.sh``` script execute various configurations of inference traces, CPU management techniques, 
 and instance core counts to conduct multiple LLM service experiments. Make sure to change experiment data output folder 
 accordingly. Upon execution, you can refer to plotting and analysis scripts we mentioned in the section above. Modify 
-the script to point experiment data properly. These scripts generate CPU aging-related plotting in the ```results_cpu```
-folder.
+the script to point experiment data properly. These scripts generate CPU aging management and carbon optimization 
+plots in the ```results_cpu``` folder.
 
 #### Reference
 
-If you use SplitwiseSimCPUAgingAware in your work, please cite the accompanying paper:
+If you use SplitwiseSimCPUCarbon in your work, please cite the accompanying paper:
 
 
 
