@@ -1,0 +1,2864 @@
+diff --git a/.gitignore b/.gitignore
+index d4adecd..ceb9039 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -6,4 +6,5 @@ results/
+ traces/
+ code_distributions.csv
+ conv_distributions.csv
+-
++.idea
++venv
+diff --git a/allocator.py b/allocator.py
+index f8f842c..2948f73 100644
+--- a/allocator.py
++++ b/allocator.py
+@@ -51,10 +51,16 @@ class Allocator(ABC):
+         model = model_repo.get_model(model_architecture=model_architecture,
+                                      model_size=model_size,
+                                      model_parallelism=parallelism)
++
++        # instances inherit the name of the GPU processor
++        instance_name = None
++        for processor in processors:
++            if processor.processor_type.value == 2:
++                instance_name = processor.name
+         instance = Instance.from_config(instance_cfg=instance_cfg,
+                                         instance_id=next(self.total_instances),
+                                         application=self.application,
+-                                        name=processors[0].name,
++                                        name=instance_name,
+                                         tag=tag,
+                                         model=model,
+                                         processors=processors,
+diff --git a/cluster.py b/cluster.py
+index 4bca5ba..90b464d 100644
+--- a/cluster.py
++++ b/cluster.py
+@@ -6,6 +6,7 @@ from itertools import count
+ from hydra.utils import instantiate
+ 
+ import hardware_repo
++from processor import ProcessorType
+ 
+ from simulator import clock, schedule_event, cancel_event, reschedule_event
+ from server import Server
+@@ -81,6 +82,52 @@ class Cluster:
+                        lambda self=self, power=self.total_power: \
+                            self.power_telemetry(0))
+ 
++    def task_logs(self):
++        task_logs = []
++        # self.servers is a dictionary of lists of servers. We need to iterate over the lists.
++        for sku in self.servers:
++            for server in self.servers[sku]:
++                cpu = [processor for processor in server.processors
++                                  if processor.processor_type == ProcessorType.CPU][0]
++                task_logs.append((server.server_id, [{
++                    "tasks_total": cpu.total_task_count_log,
++                    "tasks_oversubscribed": cpu.oversubscribed_task_count_log,
++                    "T_ts": cpu.temp_T_ts,
++                    "tasks_count": cpu.temp_running_tasks
++                }]))
++        return task_logs
++
++    def sleep_mgt_logs(self):
++        slp_mgt_logs = []
++        # self.servers is a dictionary of lists of servers. We need to iterate over the lists.
++        for sku in self.servers:
++            for server in self.servers[sku]:
++                cpu = [processor for processor in server.processors
++                                  if processor.processor_type == ProcessorType.CPU][0]
++                slp_mgt_logs.append((server.server_id, cpu.sleep_manager_logs))
++        return slp_mgt_logs
++
++    def cpu_core_usage(self):
++        """
++        Returns the CPU core usage of the cluster.
++        """
++        servers = []
++        # self.servers is a dictionary of lists of servers. We need to iterate over the lists.
++        for sku in self.servers:
++            for server in self.servers[sku]:
++                cpu = [processor for processor in server.processors
++                                  if processor.processor_type == ProcessorType.CPU][0]
++                cpu.trigger_state_update()
++                servers.append((server.server_id, cpu.core_activity_log))
++        return servers
++
++    def trigger_state_update(self):
++        for sku in self.servers:
++            for server in self.servers[sku]:
++                cpu = [processor for processor in server.processors
++                                  if processor.processor_type == ProcessorType.CPU][0]
++                cpu.trigger_state_update()
++
+     def run(self):
+         """
+         Runs servers in the cluster.
+diff --git a/configs/cluster/half_half-with-cpu.yaml b/configs/cluster/half_half-with-cpu.yaml
+new file mode 100644
+index 0000000..7a46532
+--- /dev/null
++++ b/configs/cluster/half_half-with-cpu.yaml
+@@ -0,0 +1,11 @@
++power_budget: 232000
++
++servers:
++  - sku: dgx-a100-with-cpu
++    count: 1
++  - sku: dgx-h100-with-cpu
++    count: 0
++
++interconnects:
++  - link: infiniband
++    topology: p2p
+diff --git a/configs/hardware_repo/processors/dual-amd-rome-7742.yaml b/configs/hardware_repo/processors/dual-amd-rome-7742.yaml
+new file mode 100644
+index 0000000..2a9f0e7
+--- /dev/null
++++ b/configs/hardware_repo/processors/dual-amd-rome-7742.yaml
+@@ -0,0 +1,4 @@
++_target_: processor.CPU
++name: dual-amd-rome-7742
++memory_size: 0
++core_count: 128
+\ No newline at end of file
+diff --git a/configs/hardware_repo/processors/dual-xeon-platinum-8480c-112.yaml b/configs/hardware_repo/processors/dual-xeon-platinum-8480c-112.yaml
+new file mode 100644
+index 0000000..826834b
+--- /dev/null
++++ b/configs/hardware_repo/processors/dual-xeon-platinum-8480c-112.yaml
+@@ -0,0 +1,4 @@
++_target_: processor.CPU
++name: dual-xeon-platinum-8480c
++memory_size: 0
++core_count: 112
+\ No newline at end of file
+diff --git a/configs/hardware_repo/processors/dual-xeon-platinum-8480c-40.yaml b/configs/hardware_repo/processors/dual-xeon-platinum-8480c-40.yaml
+new file mode 100644
+index 0000000..6177bf7
+--- /dev/null
++++ b/configs/hardware_repo/processors/dual-xeon-platinum-8480c-40.yaml
+@@ -0,0 +1,4 @@
++_target_: processor.CPU
++name: dual-xeon-platinum-8480c
++memory_size: 0
++core_count: 40
+diff --git a/configs/hardware_repo/processors/dual-xeon-platinum-8480c-80.yaml b/configs/hardware_repo/processors/dual-xeon-platinum-8480c-80.yaml
+new file mode 100644
+index 0000000..ec543d2
+--- /dev/null
++++ b/configs/hardware_repo/processors/dual-xeon-platinum-8480c-80.yaml
+@@ -0,0 +1,4 @@
++_target_: processor.CPU
++name: dual-xeon-platinum-8480c
++memory_size: 0
++core_count: 80
+diff --git a/configs/hardware_repo/processors/dual-xeon-platinum-8480c.yaml b/configs/hardware_repo/processors/dual-xeon-platinum-8480c.yaml
+new file mode 100644
+index 0000000..6040205
+--- /dev/null
++++ b/configs/hardware_repo/processors/dual-xeon-platinum-8480c.yaml
+@@ -0,0 +1,4 @@
++_target_: processor.CPU
++name: dual-xeon-platinum-8480c
++memory_size: 0
++core_count: 112 # scaled
+diff --git a/configs/hardware_repo/skus/dgx-a100-with-cpu.yaml b/configs/hardware_repo/skus/dgx-a100-with-cpu.yaml
+new file mode 100644
+index 0000000..0348772
+--- /dev/null
++++ b/configs/hardware_repo/skus/dgx-a100-with-cpu.yaml
+@@ -0,0 +1,9 @@
++_target_: server.Server
++name: dgx-a100
++tdp: 6500
++processors:
++  - name: a100-80gb
++    count: 8
++  - name: dual-amd-rome-7742
++    count: 1
++interconnects: {}
+diff --git a/configs/hardware_repo/skus/dgx-h100-with-cpu-vm112.yaml b/configs/hardware_repo/skus/dgx-h100-with-cpu-vm112.yaml
+new file mode 100644
+index 0000000..a19fa39
+--- /dev/null
++++ b/configs/hardware_repo/skus/dgx-h100-with-cpu-vm112.yaml
+@@ -0,0 +1,9 @@
++_target_: server.Server
++name: dgx-h100
++tdp: 10200
++processors:
++  - name: h100-80gb
++    count: 8
++  - name: dual-xeon-platinum-8480c-112
++    count: 1
++interconnects: {}
+diff --git a/configs/hardware_repo/skus/dgx-h100-with-cpu-vm40.yaml b/configs/hardware_repo/skus/dgx-h100-with-cpu-vm40.yaml
+new file mode 100644
+index 0000000..1aad043
+--- /dev/null
++++ b/configs/hardware_repo/skus/dgx-h100-with-cpu-vm40.yaml
+@@ -0,0 +1,9 @@
++_target_: server.Server
++name: dgx-h100
++tdp: 10200
++processors:
++  - name: h100-80gb
++    count: 8
++  - name: dual-xeon-platinum-8480c-40
++    count: 1
++interconnects: {}
+diff --git a/configs/hardware_repo/skus/dgx-h100-with-cpu-vm80.yaml b/configs/hardware_repo/skus/dgx-h100-with-cpu-vm80.yaml
+new file mode 100644
+index 0000000..e968f8f
+--- /dev/null
++++ b/configs/hardware_repo/skus/dgx-h100-with-cpu-vm80.yaml
+@@ -0,0 +1,9 @@
++_target_: server.Server
++name: dgx-h100
++tdp: 10200
++processors:
++  - name: h100-80gb
++    count: 8
++  - name: dual-xeon-platinum-8480c-80
++    count: 1
++interconnects: {}
+diff --git a/configs/hardware_repo/skus/dgx-h100-with-cpu.yaml b/configs/hardware_repo/skus/dgx-h100-with-cpu.yaml
+new file mode 100644
+index 0000000..c17b2fc
+--- /dev/null
++++ b/configs/hardware_repo/skus/dgx-h100-with-cpu.yaml
+@@ -0,0 +1,9 @@
++_target_: server.Server
++name: dgx-h100
++tdp: 10200
++processors:
++  - name: h100-80gb
++    count: 8
++  - name: dual-xeon-platinum-8480c
++    count: 1
++interconnects: {}
+diff --git a/configs/start_state/splitwise-with-cpu.yaml b/configs/start_state/splitwise-with-cpu.yaml
+new file mode 100644
+index 0000000..6ad3fcc
+--- /dev/null
++++ b/configs/start_state/splitwise-with-cpu.yaml
+@@ -0,0 +1,23 @@
++# single application_id is allocated to all servers
++
++state_type: splitwise_${start_state.prompt.num_instances}_${start_state.token.num_instances}
++application_id: 0
++split_type: homogeneous
++prompt:
++  instance_type: Splitwise
++  max_batch_size: 512
++  max_batch_tokens: 2048
++  max_preemptions: 4
++  pipeline_parallelism: 1
++  tensor_parallelism: 8
++  num_instances: 1
++  instance_names: ["dgx-h100-with-cpu"]
++token:
++  instance_type: Splitwise
++  max_batch_size: 512
++  max_batch_tokens: 2048
++  max_preemptions: 4
++  pipeline_parallelism: 1
++  tensor_parallelism: 8
++  num_instances: 1
++  instance_names: ["dgx-a100-with-cpu"]
+diff --git a/core_power.py b/core_power.py
+new file mode 100644
+index 0000000..9f33815
+--- /dev/null
++++ b/core_power.py
+@@ -0,0 +1,418 @@
++import math
++from enum import Enum
++import numpy as np
++
++# Approximate infinity value for the latency limit of the core wake-up time.
++# the requirement is to have an upper bound for all core idle state transition times.
++# we set to an hour, because all core transition times are practically less than that.
++APPROX_INFINITY_S = 60 * 60
++
++CPU_CORE_ADJ_INTERVAL = 1
++
++
++class CState:
++    state: str
++    target_residency_s: float
++    transition_time_s: float
++    power_w: float
++    p_state: str
++    temp: float
++
++    def __init__(self, state, target_residency_s, transition_time_s, power_w, p_state, temp):
++        self.state = state
++        self.target_residency_s = target_residency_s
++        self.transition_time_s = transition_time_s
++        self.power_w = power_w
++        self.p_state = p_state
++        self.temp = temp
++
++    def __str__(self):
++        return (
++            f"CState(state={self.state}, "
++            f"target_residency_s={self.target_residency_s}, "
++            f"transition_time_s={self.transition_time_s}, "
++            f"power_w={self.power_w})"
++            f"temp_c={self.temp})"
++        )
++
++
++class Temperatures(float, Enum):
++    C0_RTEVAL = 54.00
++    C0_POLL = 51.08
++    C6 = 48.00
++
++
++class CStates(Enum):
++    """Server CPU C-states from Table 1 of [1].
++    [1] J. H. Yahya et al., "AgileWatts: An Energy-Efficient CPU Core Idle-State Architecture for Latency-Sensitive
++    Server Applications," 2022 55th IEEE/ACM International Symposium on Microarchitecture (MICRO), Chicago, IL, USA,
++    2022, pp. 835-850, doi: 10.1109/MICRO56248.2022.00063. keywords: {Degradation;Program processors;Microarchitecture;
++    Coherence;Market research;Energy efficiency;Generators;Energy Efficiency;power management;Latency Sensitive applications},
++    """
++    C0 = CState('C0', 0.0, 0.0, 4.0, 'P1',
++                temp=Temperatures.C0_POLL)  # active and executing instructions at highest performance state
++    C1 = CState('C1', 2e-6, 2e-6, 1.44, 'P1', temp=Temperatures.C0_POLL)  # idle but online
++    C6 = CState('C6', 0.0006, 0.000133, 0.1, p_state=None, temp=Temperatures.C6)  # deep sleep state
++
++
++c_state_data = {
++    # todo We approximate IPC to 1.0, and power values estimated from prior work [1].Nevertheless, both are not used
++    # for current experiments. Prior to that, it needs to be modelled properly.
++    # [1] Smejkal, T., Bierbaum, J., Oberhauser, T., Schirmeier, H., & Härtig, H. (2023, December). Sleep Well:
++    # Pragmatic Analysis of the Idle States of Intel Processors. In Proceedings of the IEEE/ACM 10th International
++    # Conference on Big Data Computing, Applications and Technologies (pp. 1-10).
++    'dual-amd-rome-7742': {
++        'C0': {
++            "state": "C0",
++            "transition_time_s": 0.0,
++            "target_residency_s": 0.0,
++            "core_power_w": 2.572,
++            "IPC": 1.0
++        },
++        'C1': {
++            "state": "C1",
++            "transition_time_s": 2e-6,
++            "target_residency_s": 2e-6,
++            "core_power_w": 2.572 * 0.30,
++            "IPC": 0.0
++        },
++        'C6': {
++            "state": "C6",
++            "transition_time_s": 0.000133,
++            "target_residency_s": 0.0006,
++            "core_power_w": 2.572 * 0.025,
++            "IPC": 0.0
++        },
++    },
++    'dual-xeon-platinum-8480c': {
++        'C0': {
++            "state": "C0",
++            "transition_time_s": 0.0,
++            "target_residency_s": 0.0,
++            "core_power_w": 4.0,
++            "IPC": 1.0
++        },
++        'C1': {
++            "state": "C1",
++            "transition_time_s": 2e-6,
++            "target_residency_s": 2e-6,
++            "core_power_w": 4.0 * 0.30,
++            "IPC": 0.0
++        },
++        'C6': {
++            "state": "C6",
++            "transition_time_s": 0.000133,
++            "target_residency_s": 0.0006,
++            "core_power_w": 4.0 * 0.025,
++            "IPC": 0.0
++        },
++    }
++}
++
++
++def get_c_states(cpu_model):
++    """Server CPU C-states.
++    To model idle states of server CPUs, we create a model based on specification values provided for Intel server CPUs.
++    [1] J. H. Yahya et al., "AgileWatts: An Energy-Efficient CPU Core Idle-State Architecture for Latency-Sensitive
++    Server Applications," 2022 55th IEEE/ACM International Symposium on Microarchitecture (MICRO), Chicago, IL, USA,
++    2022, pp. 835-850, doi: 10.1109/MICRO56248.2022.00063. keywords: {Degradation;Program processors;Microarchitecture;
++    Coherence;Market research;Energy efficiency;Generators;Energy Efficiency;power management;Latency Sensitive applications},
++
++    information: https://lenovopress.lenovo.com/lp1945-using-processor-idle-c-states-with-linux-on-thinksystem-servers
++    """
++
++    return c_state_data[cpu_model]
++
++
++'''specs
++DGX H100 - https://resources.nvidia.com/en-us-dgx-systems/ai-enterprise-dgx?xs=489753
++DGX A100 - https://images.nvidia.com/aem-dam/Solutions/Data-Center/nvidia-dgx-a100-datasheet.pdf
++'''
++machine_specs = {
++    'dual-xeon-platinum-8480c': {  # Dual Intel® Xeon® Platinum 8480C
++        'cores': 112,
++        'refresh_cycle_years': 3,
++        'cpu_tdp_w': 700,
++        'rest_of_pkg_power_w': 252,
++        'c0_power_w': 4.0,
++        'c6_power_w': 0.1,
++        # this is assumed to be a constant. rest_of_pkg_power_w + num_cores * c0_power = cpu_tdp_w
++        # C-state power values are approximated with Intel Skylake c-state idle power consumption
++    },
++    'dual-amd-rome-7742': {  # Dual AMD Rome 7742
++        'cores': 128,
++        'refresh_cycle_years': 3,
++        # https://mcomputers.cz/en/products-and-services/nvidia/dgx-systems/nvidia-dgx-a100/
++        'cpu_tdp_w': 450,
++        'rest_of_pkg_power_w': 117.2,
++        # idle_power is 130 W (https://www.anandtech.com/show/16778/amd-epyc-milan-review-part-2/3). assume idle is all cores at c6.
++        # num_cores * c6_power + rest_of_pkg_power_w = idle_power
++        'c0_power_w': 2.6,
++        # num_cores * c0_power + rest_of_pkg_power_w = cpu_tdp_w
++        'c1_power_w': 0.936,
++        # Approx. Intel skylake: C1 power is 0.36 times C6 power.
++        'c6_power_w': 0.1,
++        # approximated with Intel skylake C6
++    },
++}
++
++
++def calculate_core_power(c_state, model):
++    return c_state.power_w
++
++
++def get_c_state_from_idle_governor(last_8_idle_durations_s=None, latency_limit_core_wake_s=APPROX_INFINITY_S):
++    """Implements Menu governer algorithm[1] to calculate the C-state.
++
++    There are several steps in selecting a c-state per-core. The Goal here is to correctly predict the idle duration of the
++    cpu, and select the appropriate c-state such that power saving and transition latency are balanced.
++
++    1. Initial idle duration is predicted based on the next os scheduler event. In ours, we assume that all other system
++    services are executed using dedicated cores and cores handle LLM inference are dedicated to that task only. Thus,
++    scheduler events do not interrupt those cores.
++
++    2. Predicted value is then adjusted for correction. For example, the predicted value is 50 ms. But typically cores
++    never stay idle for that long. So pre-calculated correction factor, say 0.8, is applied. eg: 50ms * 0.8 = 40ms. In
++    ours, we do not calculate that.
++
++    3. Next pattern recognition. Last 8 idle durations observed are saved. If the variance of those 8 values are lower,
++    the average of those values is considered as a typical idle duration. Compared to that average, if the predicted
++    value so far is higher, then the average is taken as the idle duration (i.e. take min). In ours, since we do not
++    calculate the initial idle duration, we start from the typical idle duration calculation and take that as the idle
++    duration.
++
++    4. Next, a latency limit is applied to help interactive workloads.
++
++    5. Afterwards, the appropriate c-state is selected by comparing their target residency and transition latency with
++    the calculated idle duration.
++
++    [1] https://www.kernel.org/doc/html/v5.4/admin-guide/pm/cpuidle.html
++    """
++    idle_queue = last_8_idle_durations_s.copy()
++    if idle_queue is None:
++        idle_queue = []
++    predicted_idle_duration = APPROX_INFINITY_S
++    while len(idle_queue) > 0:
++        average = sum(idle_queue) / len(idle_queue)
++        variance = sum((x - average) ** 2 for x in idle_queue) / len(idle_queue)
++        standard_deviation = variance ** 0.5
++        if variance < 0.0004 or average > 6 * standard_deviation:
++            predicted_idle_duration = average
++            break
++        idle_queue.remove(max(idle_queue))
++
++    latency_limit = predicted_idle_duration
++    number_of_tasks_waiting_on_io = 0  # we assume LLM inference tasks are CPU bound
++    latency_limit_of_power_mgt_qos = latency_limit_core_wake_s
++    if number_of_tasks_waiting_on_io > 0:
++        latency_limit = latency_limit / number_of_tasks_waiting_on_io
++    latency_limit = min(latency_limit, latency_limit_of_power_mgt_qos)
++
++    c_states = [state.value for state in CStates if
++                state.value.state != "C0"]  # C0 indicate active and executing instructions, which is not idle
++    chosen_c_state = list(filter(lambda x: x.state == "C1", c_states))[0]  # default to C1 = idle but online
++
++    return chosen_c_state
++
++
++def calculate_WTTF(cpu_model, time_s, c_state, freq):
++    """
++    Placeholder function to calculate the Weighted Time to First Failure (WTTF) of the system [1].
++
++    [1] Zhao, J., Lim, K., Anderson, T., & Enright Jerger, N. (2023, July). The Case of Unsustainable CPU Affinity.
++    In Proceedings of the 2nd Workshop on Sustainable Computer Systems (pp. 1-7).
++
++    Returns:
++    - WTTF value.
++    """
++    c_state = get_c_states(cpu_model=cpu_model)[c_state]
++    '''Calculation of WTTF
++    WTTF = SUM(ipc * operating_frequency * delta_t)
++    
++    IPC (Instructions per cycle): We estimate that per c-state.
++    operating_frequency: We do not model dynamic frequency. We assume servers are tuned to provide a constant 
++    performance through a fixed cpu frequency.
++    '''
++    wttf = c_state['IPC'] * freq * time_s
++    return wttf
++
++
++ATLAS_PARAMS = {
++    # [1] M. Ansari et al., “ATLAS: Aging-Aware Task Replication for Multicore Safety-Critical Systems,”
++    # in 2023 IEEE 29th Real-Time and Embedded Technology and Applications Symposium (RTAS), San Antonio, TX,
++    # USA: IEEE, May 2023, pp. 223–234. doi: 10.1109/RTAS58335.2023.00025.
++    '130nm': {
++        'Vdd': 1.3,
++        'Vth': 0.2,
++        't_ox': 2.25
++    },
++    '45nm': {
++        'Vdd': 1.1,
++        'Vth': 0.2,
++        't_ox': 1.75
++    },
++    '32nm': {
++        'Vdd': 1.0,
++        'Vth': 0.22,
++        't_ox': 1.65
++    },
++    '22nm': {
++        'Vdd': 0.9,
++        'Vth': 0.25,
++        't_ox': 1.4
++    },
++    '14nm': {
++        'Vdd': 0.8,
++        'Vth': 0.31,
++        't_ox': 0.9
++    },
++}
++
++
++def calc_long_term_vth_shift(vth_old, t_length, t_temp, n=0.17):
++    """
++    We use a recursive vth calculation model from,
++    Moghaddasi, I., Fouman, A., Salehi, M. E., & Kargahi, M. (2018). Instruction-level NBTI stress estimation and its
++    application in runtime aging prediction for embedded processors. IEEE Transactions on Computer-Aided Design of
++    Integrated Circuits and Systems, 38(8), 1427-1437.
++
++    Split time into each measurement interval. For each interval, time length and temperature is given.
++
++    t_length: time in seconds
++    t_temp: temperature in Celsius
++    """
++    ADH = calc_ADH(temp_celsius=t_temp)
++
++    f_1 = vth_old / ADH
++    f_2 = math.pow(f_1, 1 / n)
++    vth_new = ADH * math.pow((f_2 + t_length), n)
++    return vth_new
++
++
++def calc_ADH(temp_celsius=26.0, n=0.17):
++    """
++    Calculate the shift in threshold voltage.
++
++    Source: ATLAS paper.
++    """
++    temp_kelvin = temp_celsius + 273.15
++
++    lithography = '22nm'
++
++    K_B_boltzman_constant = 0.00008617
++    E_0 = 0.1897  # eV
++    B = 0.075  # nm/V
++    t_ox = ATLAS_PARAMS[lithography]['t_ox']
++    Vdd = ATLAS_PARAMS[lithography]['Vdd']
++
++    A_T_Vdd = (math.exp(-E_0 / (K_B_boltzman_constant * temp_kelvin))
++               * math.exp((B * Vdd) / (t_ox * K_B_boltzman_constant * temp_kelvin)))
++
++    """ATLAS: for 22nm, worstcase degradation is 30% after 10 years. Our system worst temperature is 54.
++    If a core continously operate at 54C with 1.0 stress (full utilization) for 10 years, then frequency should degrade by 30%.
++    Solving the delta_vth equation for this scenario yield following fitting parameter.
++    """
++    k_fitting_param = 1.06980863
++
++    # we assume that all tasks yield 1.0 stress (max utilization). Even not execute a task, if core is awake, it might serve floating sytem task.
++    # in our model, only forced sleep cores are truly having 0 stress. Caller should not call this function for sleeping cores.
++    Y = 1.0  # amount of stress.
++
++    # delta_vth = k_fitting_param * A_T_Vdd * math.pow(Y, n) * math.pow(t_elapsed_time, n)
++    ADH = k_fitting_param * A_T_Vdd * math.pow(Y, n)
++    return ADH
++
++
++def calc_aged_freq(initial_freq, cum_delta_vth):
++    """
++    Calculate the core frequency w.r.t. aging. initial frequency is the process variation induced initial frequency of
++    the core.
++    """
++    lithography = '22nm'
++    Vdd = ATLAS_PARAMS[lithography]['Vdd']
++    Vth = ATLAS_PARAMS[lithography]['Vth']
++
++    return initial_freq * (1 - (cum_delta_vth / (Vdd - Vth)))
++
++
++def gen_init_fq(n_cores=128):
++    """
++    Generates the initial frequencies for a given number of processor cores
++    based on process parameters modeled as a Gaussian distribution. The function
++    calculates the correlations of process parameters across a 2D grid of tiles
++    in each core and derives the maximum frequency (f_max) for each core.
++
++    Process variation model is derived from the following paper: Raghunathan, B., Turakhia, Y., Garg, S., & Marculescu,
++    D. (2013, March). Cherry-picking: Exploiting process
++    variations in dark-silicon homogeneous chip multi-processors. In 2013 Design, Automation & Test in Europe
++    Conference & Exhibition (DATE) (pp. 39-44). IEEE.
++
++    Args:
++    - n_cores (int, optional): The number of processor cores.
++
++    Returns:
++    - List[float]: A list of maximum frequencies (f_max) for the given number
++      of cores.
++
++    Attributes:
++    - f_nom (float): The nominal frequency of the processor in GHz, set to 2.25 GHz.
++    - N (int): The grid dimension for the core, set to 100 for a 100x100 grid.
++    - mu_p (float): Mean process parameter value derived from the nominal frequency.
++    - sig_p (float): Standard deviation of the process parameter, set as
++      10% of mu_p.
++    """
++    f_nom = 2.25  # GHz
++
++    # We assume that critical paths are uniformly distributed across the core (all grid tiles).
++    N = 10  # 100x100 grid
++
++    """
++    K_dash = 1 and say no process variations. Then, f_max of the core = 1 * min (1 / process_parameter). No pro. para.
++    means f_max = 1/ pro.para. Then f_max must match nominal fq. Which derives, pro. para. = 1 / f_nominal. Without 
++    variations, pro.para. should match the mean of the gaussian dst, to which pro.para is modelled. Thus, mu_p = 1 / f_nominal.
++    """
++    mu_p = 1.0 / f_nom
++    sig_p = 0.1 * mu_p  # 10% of mu_p
++
++    fqs = []
++    for idx in range(n_cores):
++        # Grid point coordinates
++        x, y = np.meshgrid(np.arange(N), np.arange(N))
++        grid_points = np.column_stack([x.ravel(), y.ravel()])  # Shape (N*N, 2)
++
++        # Calculate pairwise Euclidean distances
++        distances = np.linalg.norm(grid_points[:, np.newaxis, :] - grid_points[np.newaxis, :, :], axis=2)
++
++        """
++        Estimate half-of die with half of N_chip. At that distance apart, correlation coefficient of pro. paras. are 0.1.
++        """
++        # From [1]: At halfway distance, the correlation is < 0.1. Solve the equation for that scenario to calculate
++        # alpha.
++        # [1] B. Raghunathan, Y. Turakhia, S. Garg, and D. Marculescu, “Cherry-Picking: Exploiting Process Variations
++        # in Dark-Silicon Homogeneous Chip Multi-Processors,” in Design, Automation & Test in Europe Conference &
++        # Exhibition (DATE), 2013, Grenoble, France: IEEE Conference Publications, 2013, pp. 39–44.
++        # doi: 10.7873/DATE.2013.023.
++        alpha = 4.60512 / N
++
++        correlation_matrix = np.exp(-1 * alpha * distances)
++
++        # Create covariance matrix
++        covariance_matrix = (sig_p ** 2) * correlation_matrix
++
++        # Generate samples using multivariate normal distribution
++        rho_vals = np.random.multivariate_normal(
++            mean=np.full(N * N, mu_p),  # Mean vector
++            cov=covariance_matrix  # Covariance matrix
++        )
++
++        # Reshape samples to match the grid shape
++        rho_vals = rho_vals.reshape(N, N)
++
++        # Take inverse of each value in the rho_vals
++        rho_vals = 1 / rho_vals
++
++        # Take minimum of the rho_vals
++        f_max = min(rho_vals.flatten())
++        fqs.append(f_max)
++
++    return fqs
+diff --git a/core_residency.py b/core_residency.py
+new file mode 100644
+index 0000000..38ba560
+--- /dev/null
++++ b/core_residency.py
+@@ -0,0 +1,114 @@
++import random
++
++from scipy.stats import gaussian_kde
++import numpy as np
++import pandas as pd
++
++BW_ADJUST = 0.1
++
++
++def remove_overlap(df):
++    """We study isolated inference tasks. For example, this approach allows calculating CPU usage per-task, given all idle cores, which core to pick, etc."""
++    # Compute the end times
++    df['End'] = df['Timestamp'] + df['Runtime (s)']
++
++    # Sort the DataFrame by the start times
++    df_sorted = df.sort_values('Timestamp').reset_index(drop=True)
++
++    # Initialize variables for detecting overlaps
++    overlapping_indices = set()
++    active_intervals = []
++
++    for idx, row in df_sorted.iterrows():
++        current_start = row['Timestamp']
++        current_end = row['End']
++        current_index = idx
++
++        # Remove intervals that have ended
++        active_intervals = [interval for interval in active_intervals if interval['End'] > current_start]
++
++        # Check for overlaps with active intervals
++        for interval in active_intervals:
++            if interval['End'] > current_start:
++                overlapping_indices.add(current_index)
++                overlapping_indices.add(interval['Index'])
++
++        # Add the current interval to the active list
++        active_intervals.append({'Index': current_index, 'End': current_end})
++
++    # Remove overlapping rows
++    df_cleaned = df_sorted.drop(list(overlapping_indices)).reset_index(drop=True)
++
++    return df_cleaned
++
++
++def get_formatted_data(df):
++    df = remove_overlap(df)
++    df = df[df['Phase'].str.contains('start-inference')]
++    ret_df = pd.DataFrame()
++    ret_df['time'] = df['Timestamp']
++    ret_df['token_in'] = df['Number of Input Tokens']
++    ret_df['token_out'] = df['Output Token Limit']
++    ret_df['model'] = df['Model']
++    ret_df['runtime'] = df['Runtime (s)']
++    ret_df['core'] = df['CPU Core']
++    ret_df['gpus'] = df['Number of GPUs']
++    if 'GPU Energy (J)' in df.columns:
++        ret_df['gpu_power'] = df['GPU Energy (J)'] / df['Runtime (s)']
++    elif 'GPU Energy (mJ)' in df.columns:
++        ret_df['gpu_power'] = df['GPU Energy (mJ)'] / df['Runtime (s)']
++    if 'CPU Energy (J)' in df.columns:
++        ret_df['core_power'] = df['CPU Energy (J)'] / df['Runtime (s)']
++    return ret_df
++
++
++def core_id_sampler(df, bw_adjust=0.1):
++    # Fit KDE to the core data
++    core_data = df['core'].values
++    kde = gaussian_kde(core_data, bw_method=bw_adjust)
++
++    # Generator function to sample Core ID values
++    while True:
++        yield int(np.round(kde.resample(1)[0]))
++
++
++def task_schedule_linux(cpu_cores):
++    """Implements core assignment behavior observed in the energy inference project [1].
++
++    This function collects telemetry data from inference tasks [1] to observe CPU core residency. Based on the typical
++    operating system state of an inference server, it creates a probabilistic model to replicate core assignment behavior.
++
++    platform: https://www.lcrc.anl.gov/systems/swing
++
++    [1] https://github.com/grantwilkins/energy-inference.git
++    """
++    free_core_ids = [core.id for core in cpu_cores if core.task is None]
++
++    max_retries = len(free_core_ids)
++    core_id = None
++    retries = 0
++    while core_id is None:
++        core_id = get_core_id_of_argane_swing(num_cores=len(cpu_cores))
++        if core_id not in free_core_ids:
++            core_id = None
++            retries += 1
++        if retries >= max_retries:
++            if len(free_core_ids) > 0:
++                core_id = random.choice(free_core_ids)
++            else:
++                return None
++
++    return list(filter(lambda core: core.id == core_id, cpu_cores))[0]
++
++
++def get_core_id_of_argane_swing(num_cores):
++    TOTAL_CORES_OF_THE_SAMPLER_MODEL = 256
++    id = next(sampler)
++    # scale the core id
++    ratio = (num_cores / TOTAL_CORES_OF_THE_SAMPLER_MODEL)
++    scaled_id = id * ratio
++    return int(scaled_id)
++
++
++df_core_residency = get_formatted_data(pd.read_csv('data/infer-amd-swing-llama270b.csv'))
++sampler = core_id_sampler(df_core_residency, bw_adjust=BW_ADJUST)
+diff --git a/cpu_configs.properties b/cpu_configs.properties
+new file mode 100644
+index 0000000..875dca8
+--- /dev/null
++++ b/cpu_configs.properties
+@@ -0,0 +1,2 @@
++# either linux or least-aged or proposed
++task_allocation_algo=proposed
+\ No newline at end of file
+diff --git a/data/infer-amd-swing-llama270b.csv b/data/infer-amd-swing-llama270b.csv
+new file mode 100644
+index 0000000..9d50331
+--- /dev/null
++++ b/data/infer-amd-swing-llama270b.csv
+@@ -0,0 +1,90 @@
++Timestamp,Phase,Runtime (s),GPU-0 Energy (mJ),GPU-1 Energy (mJ),GPU-2 Energy (mJ),GPU-3 Energy (mJ),Output Token Limit,Number of Input Tokens,Iteration,Model,Number of GPUs,Prompt,Total Number of Tokens,Batch Size,System,CPU Core,GPU-0 Total Memory (MB),GPU-0 Used Memory (MB),GPU-1 Total Memory (MB),GPU-1 Used Memory (MB),GPU-2 Total Memory (MB),GPU-2 Used Memory (MB),GPU-3 Total Memory (MB),GPU-3 Used Memory (MB),GPU Energy (J)
++1715075021.379089,tokenizer,0.41504597663879395,25055,20390,20748,20862,32,0,0,Llama-2-70b-chat-hf,4,startup,0,32,argonne-swing,84,40960,34185.6875,40960,35317.6875,40960,35317.6875,40960,30921.6875,87055
++1715075021.794135,model load,282.45785546302795,15618075,15782377,16009990,16208602,32,0,0,Llama-2-70b-chat-hf,4,startup,0,32,argonne-swing,223,40960,34185.6875,40960,35317.6875,40960,35317.6875,40960,30921.6875,63619044
++1715075304.3740087,start-inference-A-8,4.641672611236572,309214,300200,304954,299812,8,8,8,Llama-2-70b-chat-hf,4,What is the largest city in France?,17,32,argonne-swing,223,40960,34335.6875,40960,35465.6875,40960,35465.6875,40960,31069.6875,1214180
++1715075309.045511,start-inference-A-16,3.299469470977783,288861,270027,272417,256092,16,8,16,Llama-2-70b-chat-hf,4,What is the largest city in France?,25,32,argonne-swing,211,40960,34337.6875,40960,35467.6875,40960,35467.6875,40960,31069.6875,1087397
++1715075312.3700073,start-inference-A-32,6.564976453781128,589718,548709,554988,542089,32,8,32,Llama-2-70b-chat-hf,4,What is the largest city in France?,41,32,argonne-swing,85,40960,34369.6875,40960,35467.6875,40960,35467.6875,40960,31071.6875,2235504
++1715075319.1342902,start-inference-A-64,14.122347116470337,1252882,1200786,1215765,1183631,64,8,64,Llama-2-70b-chat-hf,4,What is the largest city in France?,73,32,argonne-swing,219,40960,34375.6875,40960,35495.6875,40960,35495.6875,40960,31095.6875,4853064
++1715075333.282933,start-inference-A-128,29.583410501480103,2721209,2530139,2570428,2496739,128,8,128,Llama-2-70b-chat-hf,4,What is the largest city in France?,137,32,argonne-swing,209,40960,34395.6875,40960,35511.6875,40960,35511.6875,40960,31117.6875,10318515
++1715075362.893035,start-inference-A-256,68.46594738960266,6742139,6266122,6387543,6152840,256,8,256,Llama-2-70b-chat-hf,4,What is the largest city in France?,265,32,argonne-swing,88,40960,34517.6875,40960,35579.6875,40960,35579.6875,40960,31215.6875,25548644
++1715075431.3898075,start-inference-A-512,171.2092376,20676390,19710722,19903232,18292216,512,8,512,Llama-2-70b-chat-hf,4,What is the largest city in France?,521,32,argonne-swing,93,40960,36051.6875,40960,36009.6875,40960,36009.6875,40960,31969.6875,78582560
++1715075602.6541007,start-inference-A-1024,496.9145140647888,71897312,70043995,72335451,66663814,1024,8,1024,Llama-2-70b-chat-hf,4,What is the largest city in France?,1033,32,argonne-swing,213,40960,35785.6875,40960,37903.6875,40960,37903.6875,40960,34947.6875,280940572
++1715076099.6582267,start-inference-A-2048,1663.6726236343384,254217324,249102794,259971413,239795466,2048,8,2048,Llama-2-70b-chat-hf,4,What is the largest city in France?,2057,32,argonne-swing,223,40960,36313.6875,40960,40161.6875,40960,40161.6875,40960,37479.6875,1003086997
++1715077763.4126194,start-inference-B-8,1.8108198642730713,170530,184117,198811,183020,8,16,8,Llama-2-70b-chat-hf,4,Can you explain the difference between a simile an,29,32,argonne-swing,221,40960,34363.6875,40960,35493.6875,40960,35493.6875,40960,31093.6875,736478
++1715077765.2600179,start-inference-B-16,3.756755828857422,326534,299680,328825,314877,16,16,16,Llama-2-70b-chat-hf,4,Can you explain the difference between a simile an,37,32,argonne-swing,217,40960,34337.6875,40960,35467.6875,40960,35467.6875,40960,31071.6875,1269916
++1715077769.0439048,start-inference-B-32,7.370251655578613,636540,605459,623218,597605,32,16,32,Llama-2-70b-chat-hf,4,Can you explain the difference between a simile an,53,32,argonne-swing,92,40960,34371.6875,40960,35469.6875,40960,35469.6875,40960,31073.6875,2462822
++1715077776.4398093,start-inference-B-64,15.445990085601807,1371765,1275636,1324149,1262215,64,16,64,Llama-2-70b-chat-hf,4,Can you explain the difference between a simile an,85,32,argonne-swing,205,40960,34375.6875,40960,35493.6875,40960,35493.6875,40960,31097.6875,5233765
++1715077791.9225826,start-inference-B-128,32.24592971801758,2986722,2770622,2870493,2740372,128,16,128,Llama-2-70b-chat-hf,4,Can you explain the difference between a simile an,149,32,argonne-swing,90,40960,34395.6875,40960,35513.6875,40960,35513.6875,40960,31117.6875,11368209
++1715077824.203548,start-inference-B-256,74.23896551132202,7266812,6766073,6979260,6638778,256,16,256,Llama-2-70b-chat-hf,4,Can you explain the difference between a simile an,277,32,argonne-swing,81,40960,34549.6875,40960,35579.6875,40960,35579.6875,40960,31217.6875,27650923
++1715077898.4823086,start-inference-B-512,181.73884439468384,21772543,20779929,21111258,19025025,512,16,512,Llama-2-70b-chat-hf,4,Can you explain the difference between a simile an,533,32,argonne-swing,94,40960,36183.6875,40960,36009.6875,40960,36009.6875,40960,32035.6875,82688755
++1715078080,start-inference-B-1024,510.5407907962799,72598670,70934236,73211554,67634979,1024,16,1024,Llama-2-70b-chat-hf,4,Can you explain the difference between a simile an,1045,32,argonne-swing,206,40960,36041.6875,40960,37903.6875,40960,37903.6875,40960,35075.6875,284379439
++1715078590.9240522,start-inference-B-2048,1705.838897228241,263684233,257696601,267926405,246934407,2048,16,2048,Llama-2-70b-chat-hf,4,Can you explain the difference between a simile an,2069,32,argonne-swing,86,40960,36821.6875,40960,40161.6875,40960,40163.6875,40960,37735.6875,1036241646
++1715080296.8582938,start-inference-C-8,1.7841250896453857,165341,189892,205844,191366,8,32,8,Llama-2-70b-chat-hf,4,What are some effective strategies for managing st,46,32,argonne-swing,210,40960,34395.6875,40960,35495.6875,40960,35493.6875,40960,31095.6875,752443
++1715080298.6782002,start-inference-C-16,3.7326207160949707,324926,309997,321431,306270,16,32,16,Llama-2-70b-chat-hf,4,What are some effective strategies for managing st,54,32,argonne-swing,94,40960,34373.6875,40960,35469.6875,40960,35469.6875,40960,31073.6875,1262624
++1715080302.4377172,start-inference-C-32,7.543445825576782,665441,626198,645953,624172,32,32,32,Llama-2-70b-chat-hf,4,What are some effective strategies for managing st,70,32,argonne-swing,223,40960,34375.6875,40960,35493.6875,40960,35493.6875,40960,31095.6875,2561764
++1715080310.0075788,start-inference-C-64,15.815550327301025,1431679,1328036,1388689,1318639,64,32,64,Llama-2-70b-chat-hf,4,What are some effective strategies for managing st,102,32,argonne-swing,219,40960,34375.6875,40960,35493.6875,40960,35493.6875,40960,31095.6875,5467043
++1715080325.8512113,start-inference-C-128,34.55908179283142,3219704,2990782,3117129,2975067,128,32,128,Llama-2-70b-chat-hf,4,What are some effective strategies for managing st,166,32,argonne-swing,207,40960,34415.6875,40960,35513.6875,40960,35513.6875,40960,31115.6875,12302682
++1715080360.4408891,start-inference-C-256,77.28023028373718,7674768,7125961,7360549,6969522,256,32,256,Llama-2-70b-chat-hf,4,What are some effective strategies for managing st,294,32,argonne-swing,89,40960,34621.6875,40960,35579.6875,40960,35579.6875,40960,31253.6875,29130800
++1715080438,start-inference-C-512,186.14657831192017,22819113,21698112,22392665,20269131,512,32,512,Llama-2-70b-chat-hf,4,What are some effective strategies for managing st,550,32,argonne-swing,95,40960,36319.6875,40960,36009.6875,40960,36009.6875,40960,32103.6875,87179021
++1715080623.9662416,start-inference-C-1024,524.1773097515106,75644259,73680833,76174973,70197505,1024,32,1024,Llama-2-70b-chat-hf,4,What are some effective strategies for managing st,1062,32,argonne-swing,215,40960,36301.6875,40960,37903.6875,40960,37903.6875,40960,35205.6875,295697570
++1715081148.2505808,start-inference-C-2048,1727.4615771770477,267322003,261417827,271997418,250658169,2048,32,2048,Llama-2-70b-chat-hf,4,What are some effective strategies for managing st,2086,32,argonne-swing,223,40960,37335.6875,40960,40161.6875,40960,40161.6875,40960,37989.6875,1051395417
++1715082875.793112,start-inference-D-8,1.9541492462158203,196698,222549,245821,229322,8,64,8,Llama-2-70b-chat-hf,4,Imagine you are an expert travel guide for Japan.,86,32,argonne-swing,223,40960,34399.6875,40960,35511.6875,40960,35511.6875,40960,31111.6875,894390
++1715082877.7841594,start-inference-D-16,4.161132335662842,383511,361293,370660,349241,16,64,16,Llama-2-70b-chat-hf,4,Imagine you are an expert travel guide for Japan.,94,32,argonne-swing,93,40960,34375.6875,40960,35483.6875,40960,35483.6875,40960,31087.6875,1464705
++1715082881.9927895,start-inference-D-32,8.475521326065063,762618,722459,759124,715769,32,64,32,Llama-2-70b-chat-hf,4,Imagine you are an expert travel guide for Japan.,110,32,argonne-swing,199,40960,34375.6875,40960,35483.6875,40960,35483.6875,40960,31087.6875,2959970
++1715082890.4899068,start-inference-D-64,17.465486526489258,1624582,1517841,1588221,1513657,64,64,64,Llama-2-70b-chat-hf,4,Imagine you are an expert travel guide for Japan.,142,32,argonne-swing,192,40960,34395.6875,40960,35505.6875,40960,35505.6875,40960,31109.6875,6244301
++1715082907.9833405,start-inference-D-128,37.314305543899536,3615341,3375099,3486401,3323661,128,64,128,Llama-2-70b-chat-hf,4,Imagine you are an expert travel guide for Japan.,206,32,argonne-swing,222,40960,34429.6875,40960,35531.6875,40960,35531.6875,40960,31135.6875,13800502
++1715082945.3299658,start-inference-D-256,83.33809614181519,8529074,7937519,8141047,7712621,256,64,256,Llama-2-70b-chat-hf,4,Imagine you are an expert travel guide for Japan.,334,32,argonne-swing,218,40960,34855.6875,40960,35615.6875,40960,35615.6875,40960,31369.6875,32320261
++1715083028.7092874,start-inference-D-512,196.15468335151672,25086369,24099957,24470201,22388595,512,64,512,Llama-2-70b-chat-hf,4,Imagine you are an expert travel guide for Japan.,590,32,argonne-swing,84,40960,36599.6875,40960,36209.6875,40960,36207.6875,40960,32245.6875,96045122
++1715083224.9303362,start-inference-D-1024,548.0962138175964,80005994,78497568,81277606,74764324,1024,64,1024,Llama-2-70b-chat-hf,4,Imagine you are an expert travel guide for Japan.,1102,32,argonne-swing,87,40960,37105.6875,40960,38269.6875,40960,38269.6875,40960,35607.6875,314545492
++1715083773.1153352,start-inference-D-2048,1764.1998219490051,271139585,265877825,277317778,255848200,2048,64,2048,Llama-2-70b-chat-hf,4,Imagine you are an expert travel guide for Japan.,2126,32,argonne-swing,95,40960,38369.6875,40960,40863.6875,40960,40863.6875,40960,38509.6875,1070183388
++1715085537.3992963,start-inference-E-8,2.2586379051208496,283803,283134,292136,268529,8,128,8,Llama-2-70b-chat-hf,4,"As an AI language model, you possess the capabilit",162,32,argonne-swing,193,40960,34421.6875,40960,35531.6875,40960,35531.6875,40960,31131.6875,1127602
++1715085539.696113,start-inference-E-16,5.082648515701294,499667,463758,488857,469981,16,128,16,Llama-2-70b-chat-hf,4,"As an AI language model, you possess the capabilit",170,32,argonne-swing,90,40960,34427.6875,40960,35505.6875,40960,35505.6875,40960,31109.6875,1922263
++1715085544.8047857,start-inference-E-32,10.005360841751099,1007216,935573,976367,913734,32,128,32,Llama-2-70b-chat-hf,4,"As an AI language model, you possess the capabilit",186,32,argonne-swing,194,40960,34427.6875,40960,35529.6875,40960,35529.6875,40960,31133.6875,3832890
++1715085554.8378692,start-inference-E-64,19.87956142425537,2014967,1882269,1949808,1837168,64,128,64,Llama-2-70b-chat-hf,4,"As an AI language model, you possess the capabilit",218,32,argonne-swing,193,40960,34441.6875,40960,35531.6875,40960,35531.6875,40960,31135.6875,7684212
++1715085574.7495399,start-inference-E-128,42.31931924819946,4338602,4045946,4182528,3951032,128,128,128,Llama-2-70b-chat-hf,4,"As an AI language model, you possess the capabilit",282,32,argonne-swing,87,40960,34613.6875,40960,35575.6875,40960,35575.6875,40960,31249.6875,16518108
++1715085617.102171,start-inference-E-256,93.48313879966736,10508993,9708153,9926916,9142130,256,128,256,Llama-2-70b-chat-hf,4,"As an AI language model, you possess the capabilit",410,32,argonne-swing,95,40960,35233.6875,40960,35755.6875,40960,35755.6875,40960,31561.6875,39286192
++1715085710.6270745,start-inference-E-512,218.60136103630066,29922912,28757959,29442358,26834740,512,128,512,Llama-2-70b-chat-hf,4,"As an AI language model, you possess the capabilit",666,32,argonne-swing,86,40960,37379.6875,40960,36431.6875,40960,36429.6875,40960,32635.6875,114957969
++1715085929.3057342,start-inference-E-1024,590.1171305179596,87812820,86117658,89689266,82529331,1024,128,1024,Llama-2-70b-chat-hf,4,"As an AI language model, you possess the capabilit",1173,32,argonne-swing,215,40960,38235.6875,40960,38661.6875,40960,38661.6875,40960,36171.6875,346149075
++1715086519.5371015,start-inference-E-2048,1618.054609298706,251737713,246260117,256308573,236340294,2048,128,2048,Llama-2-70b-chat-hf,4,"As an AI language model, you possess the capabilit",2032,32,argonne-swing,194,40960,35307.6875,40960,39817.6875,40960,39815.6875,40960,36973.6875,990646697
++1715088137.680525,start-inference-F-8,2.8492166996002197,341290,364709,388779,340146,8,256,8,Llama-2-70b-chat-hf,4,/* An improved random number generation package.,275,32,argonne-swing,89,40960,34503.6875,40960,35577.6875,40960,35579.6875,40960,31213.6875,1434924
++1715088140.5676346,start-inference-F-16,6.322083473205566,685037,608515,653128,619576,16,256,16,Llama-2-70b-chat-hf,4,/* An improved random number generation package.,283,32,argonne-swing,210,40960,34551.6875,40960,35557.6875,40960,35557.6875,40960,31231.6875,2566256
++1715088146.9173205,start-inference-F-32,12.22777795791626,1376003,1287650,1288492,1198708,32,256,32,Llama-2-70b-chat-hf,4,/* An improved random number generation package.,299,32,argonne-swing,211,40960,34627.6875,40960,35575.6875,40960,35575.6875,40960,31269.6875,5150853
++1715088159.1782844,start-inference-F-64,25.002392053604126,2790293,2598693,2634034,2423547,64,256,64,Llama-2-70b-chat-hf,4,/* An improved random number generation package.,331,32,argonne-swing,217,40960,34791.6875,40960,35577.6875,40960,35577.6875,40960,31351.6875,10446567
++1715088184.215921,start-inference-F-128,50.73573327064514,5783109,5482069,5562491,5025025,128,256,128,Llama-2-70b-chat-hf,4,/* An improved random number generation package.,395,32,argonne-swing,210,40960,35071.6875,40960,35665.6875,40960,35665.6875,40960,31493.6875,21852694
++1715088235.0064907,start-inference-F-256,105.90170311927795,14252835,13647199,13960954,12248367,256,256,256,Llama-2-70b-chat-hf,4,/* An improved random number generation package.,523,32,argonne-swing,218,40960,35987.6875,40960,35991.6875,40960,35991.6875,40960,31951.6875,54109355
++1715088340.960123,start-inference-F-512,250.47814345359802,36608119,35916435,36929690,33620977,512,256,512,Llama-2-70b-chat-hf,4,/* An improved random number generation package.,779,32,argonne-swing,89,40960,38577.6875,40960,36789.6875,40960,36789.6875,40960,33247.6875,143075221
++1715088591.5095413,start-inference-F-1024,662.1383728981018,101576082,99422083,103742926,95233978,1024,256,1024,Llama-2-70b-chat-hf,4,/* An improved random number generation package.,1291,32,argonne-swing,90,40960,40247.6875,40960,39273.6875,40960,39275.6875,40960,37219.6875,399975069
++1715175931.5553977,start-inference-G-8,8.806884527206421,893874,931613,880284,768713,8,512,8,Llama-2-70b-chat-hf,4,/*This is a version (aka ptmalloc2) of malloc/free,549,32,argonne-swing,189,40960,34719.6875,40960,35617.6875,40960,35615.6875,40960,31387.6875,3474484
++1715175940.4107707,start-inference-G-16,7.640662670135498,1270391,1257004,1210272,1088589,16,512,16,Llama-2-70b-chat-hf,4,/*This is a version (aka ptmalloc2) of malloc/free,557,32,argonne-swing,62,40960,34721.6875,40960,35713.6875,40960,35713.6875,40960,31389.6875,4826256
++1715175948.0834312,start-inference-G-32,15.668142795562744,2599904,2580335,2406357,2233413,32,512,32,Llama-2-70b-chat-hf,4,/*This is a version (aka ptmalloc2) of malloc/free,573,32,argonne-swing,52,40960,34861.6875,40960,35713.6875,40960,35713.6875,40960,31459.6875,9820009
++1715175963.7924056,start-inference-G-64,31.107057571411133,5213871,5230144,4879655,4458001,64,512,64,Llama-2-70b-chat-hf,4,/*This is a version (aka ptmalloc2) of malloc/free,605,32,argonne-swing,62,40960,35153.6875,40960,35815.6875,40960,35815.6875,40960,31605.6875,19781671
++1715175994.9361777,start-inference-G-128,63.35720896720886,10641496,10740817,10035557,9325579,128,512,128,Llama-2-70b-chat-hf,4,/*This is a version (aka ptmalloc2) of malloc/free,669,32,argonne-swing,177,40960,35787.6875,40960,36039.6875,40960,36039.6875,40960,31921.6875,40743449
++1715176058.3485746,start-inference-G-256,138.1055645942688,22970056,23424043,21757112,20093233,256,512,256,Llama-2-70b-chat-hf,4,/*This is a version (aka ptmalloc2) of malloc/free,797,32,argonne-swing,56,40960,37245.6875,40960,36419.6875,40960,36419.6875,40960,32651.6875,88244444
++1715176196.510476,start-inference-G-512,318.3132631778717,52201365,53923205,49820066,45730590,512,512,512,Llama-2-70b-chat-hf,4,/*This is a version (aka ptmalloc2) of malloc/free,1053,32,argonne-swing,50,40960,40929.6875,40960,37515.6875,40960,37515.6875,40960,34495.6875,201675226
++1715176514.9005806,start-inference-G-1024,813.3415386676788,133787666,137487492,126891978,116647698,1024,512,1024,Llama-2-70b-chat-hf,4,/*This is a version (aka ptmalloc2) of malloc/free,1565,32,argonne-swing,58,40960,38663.6875,40960,40589.6875,40960,40587.6875,40960,39523.6875,514814834
++1715177328.3703966,start-inference-H-8,5.914596319198608,963891,991100,918679,816916,8,1024,8,Llama-2-70b-chat-hf,4,"/void _quicksort (void *const pbase, size_t total_",994,32,argonne-swing,130,40960,34933.6875,40960,35927.6875,40960,35927.6875,40960,31543.6875,3690586
++1715177334.3457808,start-inference-H-16,11.770387887954712,1910031,1982703,1846105,1652371,16,1024,16,Llama-2-70b-chat-hf,4,"/void _quicksort (void *const pbase, size_t total_",1002,32,argonne-swing,60,40960,35051.6875,40960,35919.6875,40960,35919.6875,40960,31661.6875,7391210
++1715177346.1523619,start-inference-H-32,23.46202016,3848474,3978416,3666921,3370422,32,1024,32,Llama-2-70b-chat-hf,4,"/void _quicksort (void *const pbase, size_t total_",1018,32,argonne-swing,191,40960,35299.6875,40960,35921.6875,40960,35919.6875,40960,31787.6875,14864233
++1715177369.6517172,start-inference-H-64,48.50747275352478,7973241,8243494,7639316,6956809,64,1024,64,Llama-2-70b-chat-hf,4,"/void _quicksort (void *const pbase, size_t total_",1050,32,argonne-swing,188,40960,35683.6875,40960,36095.6875,40960,36095.6875,40960,31917.6875,30812860
++1715177418.2172854,start-inference-H-128,100.39242172241211,16493405,17080068,15763534,14414452,128,1024,128,Llama-2-70b-chat-hf,4,"/void _quicksort (void *const pbase, size_t total_",1114,32,argonne-swing,60,40960,36749.6875,40960,36461.6875,40960,36461.6875,40960,32449.6875,63751459
++1715177518.6595223,start-inference-H-256,210.91123414039612,34880032,36023043,33231470,30522427,256,1024,256,Llama-2-70b-chat-hf,4,"/void _quicksort (void *const pbase, size_t total_",1242,32,argonne-swing,142,40960,39071.6875,40960,37059.6875,40960,37057.6875,40960,33611.6875,134656972
++1715177729.669116,start-inference-H-512,465.29207396507263,77609509,79551765,73376327,67469112,512,1024,512,Llama-2-70b-chat-hf,4,"/void _quicksort (void *const pbase, size_t total_",1498,32,argonne-swing,140,40960,38471.6875,40960,38659.6875,40960,38659.6875,40960,36319.6875,298006713
++1715178195.0459268,start-inference-H-1024,1122.7792809009552,186357601,191794550,176987871,162971971,1024,1024,1024,Llama-2-70b-chat-hf,4,"/void _quicksort (void *const pbase, size_t total_",2008,32,argonne-swing,3,40960,40185.6875,40960,37699.6875,40960,37699.6875,40960,33565.6875,718111993
++1715179317.8791382,start-inference-I-8,12.493916034698486,2038482,2114725,1969111,1821626,8,2048,8,Llama-2-70b-chat-hf,4,"#include <alloca.h>
++#include <limits.h>
++#include <",2142,32,argonne-swing,3,40960,35517.6875,40960,36121.6875,40960,36121.6875,40960,32117.6875,7943944
++1715179330.4198227,start-inference-I-16,24.775622367858887,4072825,4229200,3924548,3630259,16,2048,16,Llama-2-70b-chat-hf,4,"#include <alloca.h>
++#include <limits.h>
++#include <",2150,32,argonne-swing,128,40960,36047.6875,40960,36121.6875,40960,36121.6875,40960,32379.6875,15856832
++1715179355.2386158,start-inference-I-32,49.87935114,8175275,8507749,7858467,7254143,32,2048,32,Llama-2-70b-chat-hf,4,"#include <alloca.h>
++#include <limits.h>
++#include <",2166,32,argonne-swing,143,40960,36579.6875,40960,36481.6875,40960,36481.6875,40960,32645.6875,31795634
++1715179405.1592095,start-inference-I-64,99.69505358,16439816,17063459,15779491,14566065,64,2048,64,Llama-2-70b-chat-hf,4,"#include <alloca.h>
++#include <limits.h>
++#include <",2198,32,argonne-swing,15,40960,37385.6875,40960,36847.6875,40960,36849.6875,40960,33183.6875,63848831
++1715179504.9017742,start-inference-I-128,203.6235225200653,33423934,34809589,32167029,29661445,128,2048,128,Llama-2-70b-chat-hf,4,"#include <alloca.h>
++#include <limits.h>
++#include <",2262,32,argonne-swing,133,40960,39301.6875,40960,37219.6875,40960,37221.6875,40960,34005.6875,130061997
++1715179709,start-inference-I-256,417.9781768321991,68577251,71445906,66064207,61013953,256,2048,256,Llama-2-70b-chat-hf,4,"#include <alloca.h>
++#include <limits.h>
++#include <",2390,32,argonne-swing,0,40960,38447.6875,40960,38769.6875,40960,38769.6875,40960,36285.6875,267101317
+\ No newline at end of file
+diff --git a/executor.py b/executor.py
+index 550232b..a08439c 100644
+--- a/executor.py
++++ b/executor.py
+@@ -3,6 +3,7 @@ import logging
+ from enum import IntEnum
+ 
+ from flow import Flow
++from instance import CpuTaskType, LINUX_RR_PROCESS_TIMESLICE
+ from node import NodeState
+ from simulator import clock, schedule_event, cancel_event, reschedule_event
+ from task import Task
+@@ -34,6 +35,7 @@ class Executor():
+         self.submitted = []
+         # to cancel any events
+         self.completion_events = {}
++        self.cpu = None
+ 
+     def successors(self, node):
+         """
+@@ -55,6 +57,13 @@ class Executor():
+         """
+         Submits the specified node for execution.
+         """
++
++        # model cpu occupancy. note we do not model blocking time of mem. allocation for the inference flow.
++        cpu = self.cpu
++        c_id, overhead, age_scaling =cpu.assign_core_to_cpu_task(task=CpuTaskType.EXECUTOR_TASK)
++        runtime = CpuTaskType.EXECUTOR_TASK.value["overhead_time"] * age_scaling
++        schedule_event(runtime + overhead, lambda c_id=c_id: cpu.release_core_from_cpu_task(task_core_id=c_id))
++
+         if isinstance(node, Task):
+             self.submit_task(node)
+         elif isinstance(node, Flow):
+@@ -66,6 +75,13 @@ class Executor():
+         """
+         Submits the specified chain of Nodes for execution.
+         """
++
++        # model cpu occupancy. note we do not model blocking time of mem. allocation for the inference flow.
++        cpu = self.cpu
++        c_id, overhead, age_scaling = cpu.assign_core_to_cpu_task(task=CpuTaskType.EXECUTOR_TASK)
++        runtime = CpuTaskType.EXECUTOR_TASK.value["overhead_time"] * age_scaling
++        schedule_event(runtime + overhead, lambda c_id=c_id: cpu.release_core_from_cpu_task(task_core_id=c_id))
++
+         for node in chain:
+             self.submit(node)
+ 
+@@ -79,8 +95,15 @@ class Executor():
+         task.executor = self
+         self.submitted.append(task)
+         schedule_event(self.overheads.submit_task,
+-                       lambda instance=instance,task=task: \
++                       lambda instance=instance, task=task: \
+                            instance.task_arrival(task))
++
++        # model cpu occupancy. note we do not model blocking time of mem. allocation for the inference flow.
++        cpu = self.cpu
++        c_id, overhead, age_scaling =cpu.assign_core_to_cpu_task(task=CpuTaskType.HANDLE_TASK_ARRIVAL)
++        runtime = (LINUX_RR_PROCESS_TIMESLICE * 2) * age_scaling
++        schedule_event(runtime + overhead, lambda c_id=c_id: cpu.release_core_from_cpu_task(task_core_id=c_id))
++
+         # if this is the first task in the chain, submit the chain
+         self.submit_chain(task.chain)
+ 
+@@ -88,6 +111,13 @@ class Executor():
+         """
+         Finishes the specified task.
+         """
++
++        # model cpu occupancy. note we do not model blocking time of mem. allocation for the inference flow.
++        cpu = self.cpu
++        c_id, overhead, age_scaling = cpu.assign_core_to_cpu_task(task=CpuTaskType.EXECUTOR_TASK)
++        runtime = CpuTaskType.EXECUTOR_TASK.value["overhead_time"] * age_scaling
++        schedule_event(runtime + overhead, lambda c_id=c_id: cpu.release_core_from_cpu_task(task_core_id=c_id))
++
+         self.submitted.remove(task)
+         successor_nodes = list(self.successors(task))
+         # NOTE: assumes a single leaf node
+@@ -105,6 +135,13 @@ class Executor():
+         Submits the specified flow for execution.
+         If link is not specified, uses the flow's link.
+         """
++
++        # model cpu occupancy. note we do not model blocking time of mem. allocation for the inference flow.
++        cpu = self.cpu
++        c_id, overhead, age_scaling = cpu.assign_core_to_cpu_task(task=CpuTaskType.EXECUTOR_TASK)
++        runtime = CpuTaskType.EXECUTOR_TASK.value["overhead_time"] * age_scaling
++        schedule_event(runtime + overhead, lambda c_id=c_id: cpu.release_core_from_cpu_task(task_core_id=c_id))
++
+         if link is None:
+             link = flow.link
+         flow.executor = self
+@@ -118,6 +155,13 @@ class Executor():
+         """
+         Finishes the specified flow.
+         """
++
++        # model cpu occupancy. note we do not model blocking time of mem. allocation for the inference flow.
++        cpu = self.cpu
++        c_id, overhead, age_scaling = cpu.assign_core_to_cpu_task(task=CpuTaskType.EXECUTOR_TASK)
++        runtime = CpuTaskType.EXECUTOR_TASK.value["overhead_time"] * age_scaling
++        schedule_event(runtime + overhead, lambda c_id=c_id: cpu.release_core_from_cpu_task(task_core_id=c_id))
++
+         self.submitted.remove(flow)
+         successor_nodes = list(self.successors(flow))
+         # NOTE: assumes a single leaf node
+@@ -134,6 +178,13 @@ class Executor():
+         """
+         Finishes executing the entire Request.
+         """
++
++        # model cpu occupancy. note we do not model blocking time of mem. allocation for the inference flow.
++        cpu = self.cpu
++        c_id, overhead, age_scaling = cpu.assign_core_to_cpu_task(task=CpuTaskType.EXECUTOR_TASK)
++        runtime = CpuTaskType.EXECUTOR_TASK.value["overhead_time"] * age_scaling
++        schedule_event(runtime + overhead, lambda c_id=c_id: cpu.release_core_from_cpu_task(task_core_id=c_id))
++
+         def fin_req():
+             self.scheduler.request_completion(self.request)
+         schedule_event(self.overheads.finish_request, fin_req)
+diff --git a/flow.py b/flow.py
+index 7203e93..d3f261f 100644
+--- a/flow.py
++++ b/flow.py
+@@ -3,7 +3,7 @@ import logging
+ from dataclasses import dataclass, field
+ from enum import IntEnum
+ 
+-from instance import Instance
++from instance import Instance, CpuTaskType
+ from metrics import FlowMetrics, FlowSLO
+ from model import Model, ModelArchitecture
+ from node import Node
+@@ -67,6 +67,7 @@ class Flow(Node):
+         # manage memory
+         self.dest.alloc_memory(self.request, self.request.memory)
+ 
++
+     def complete(self):
+         super().complete()
+ 
+diff --git a/instance.py b/instance.py
+index 7c01e11..2ccc831 100644
+--- a/instance.py
++++ b/instance.py
+@@ -10,6 +10,7 @@ import utils
+ from metrics import InstanceMetrics
+ from node import NodeState
+ from performance_model import get_duration, get_iteration_duration
++#from processor import CPU
+ from simulator import clock, schedule_event, cancel_event, reschedule_event
+ from task import PromptTask, TokenTask
+ 
+@@ -25,6 +26,9 @@ class Instance():
+     NOTE: uses a FIFO task queue, not priority queue
+     NOTE: preemptions, batching, etc. implemented in subclasses
+     """
++
++    cpu = None
++
+     def __init__(self,
+                  instance_id,
+                  application,
+@@ -56,7 +60,9 @@ class Instance():
+         self.memory = self.model.size.total_size
+         self.memory_allocs = defaultdict(int)
+         self.memory_allocs["model"] = self.model.size.total_size
+-        self.max_memory = self.processors[0].memory_size * len(self.processors)
++
++        gpus = [p for p in self.processors if p.processor_type.value == 2]
++        self.max_memory = gpus[0].memory_size * len(gpus)
+ 
+         ## task queues
+         self.pending_queue = []
+@@ -76,6 +82,9 @@ class Instance():
+             os.makedirs(os.path.dirname(logger_name), exist_ok=True)
+             self.scheduler_logger = utils.file_logger(logger_name, level)
+ 
++        ## set cpu
++        self.cpu = list(filter(lambda p: p.processor_type.value == 1, self.processors))[0]
++
+     @property
+     def model(self):
+         return self._model
+@@ -92,6 +101,9 @@ class Instance():
+     def memory(self, memory):
+         self._memory = memory
+         for processor in self.processors:
++            if processor.processor_type.value == 1:
++                # TODO: we omit CPU memory for now.
++                continue
+             processor.memory_used = memory / len(self.processors)
+ 
+     def alloc_memory(self, tag, memory):
+@@ -101,6 +113,12 @@ class Instance():
+         self.memory += memory
+         self.memory_allocs[tag] += memory
+ 
++        # model cpu occupancy. note we do not model blocking time of mem. allocation for the inference flow.
++        instance = self
++        c_id, overhead, age_scaling =instance.cpu.assign_core_to_cpu_task(task=CpuTaskType.INSTANCE_MEM_ALLOC)
++        runtime = CpuTaskType.INSTANCE_MEM_ALLOC.value["overhead_time"] * age_scaling
++        schedule_event(runtime + overhead, lambda c_id=c_id: instance.cpu.release_core_from_cpu_task(task_core_id=c_id))
++
+     def free_memory(self, tag, memory):
+         """
+         Free memory from the pool.
+@@ -111,20 +129,31 @@ class Instance():
+         if self.memory_allocs[tag] == 0:
+             del self.memory_allocs[tag]
+ 
++        # model cpu occupancy. note we do not model blocking time of mem. allocation for the inference flow.
++        instance = self
++        c_id, overhead, age_scaling =instance.cpu.assign_core_to_cpu_task(task=CpuTaskType.INSTANCE_MEM_FREE)
++        runtime = CpuTaskType.INSTANCE_MEM_FREE.value["overhead_time"] * age_scaling
++        schedule_event(runtime + overhead, lambda c_id=c_id: instance.cpu.release_core_from_cpu_task(task_core_id=c_id))
++
+     def task_arrival(self, task):
+         """
+         Task arrives at this Instance.
+         """
++        # todo: core assignment is not implemented here, as we only simulate with SpliwiseInstance. If to use this class,
++        # core assignment should be implemented.
+         task.instance = self
+         task.arrive()
+         self.pending_queue.append(task)
+         if len(self.pending_queue) == 1 and len(self.batch) == 0:
+             self.run_task(task)
+ 
+-    def task_completion(self, task):
++
++    def task_completion(self, task, core_id=None):
+         """
+         Task completes at this Instance.
+         """
++        # todo: core assignment is not implemented here, as we only simulate with SpliwiseInstance. If to use this class,
++        # core assignment should be implemented.
+         task.complete()
+         self.metrics.busy_time += clock() - self.metrics.run_timestamp
+         self.metrics.run_timestamp = 0.
+@@ -160,7 +189,13 @@ class Instance():
+                                      batch=[task],
+                                      instance=self)
+         schedule_event(self.overheads.run + task.duration,
+-                       lambda instance=self,task=task: instance.task_completion(task))
++                       lambda instance=self, task=task: instance.task_completion(task))
++
++        # model cpu occupancy. note we do not model blocking time of mem. allocation for the inference flow.
++        instance = self
++        c_id, overhead, age_scaling =instance.cpu.assign_core_to_cpu_task(task=CpuTaskType.RUN_TASK)
++        runtime = task.duration * age_scaling
++        schedule_event(runtime + overhead, lambda c_id=c_id: instance.cpu.release_core_from_cpu_task(task_core_id=c_id))
+ 
+     def preempt_task(self, task):
+         """
+@@ -317,6 +352,8 @@ class ORCAInstance(Instance):
+         else:
+             raise ValueError(f"Unexpected task type {task.task_type} in add_pending_task")
+ 
++        # cpu modelling is done at the caller level.
++
+     def remove_pending_task(self, task):
+         """
+         Remove a Task from the pending queue.
+@@ -332,6 +369,8 @@ class ORCAInstance(Instance):
+         else:
+             raise ValueError(f"Unexpected task type {task.task_type} in remove_pending_task")
+ 
++        # cpu modelling is done at the caller level.
++
+     def add_to_pool(self, task):
+         """
+         Add a Task to the request pool.
+@@ -344,6 +383,8 @@ class ORCAInstance(Instance):
+         else:
+             self.request_tasks[task.request].append(task)
+ 
++        # cpu modelling is done at the caller level.
++
+     def remove_from_pool(self, task):
+         """
+         Remove a Task from the request pool.
+@@ -353,7 +394,11 @@ class ORCAInstance(Instance):
+             self.pending_requests.remove(task.request)
+             del self.request_tasks[task.request]
+ 
++        # cpu modelling is done at the caller level.
++
+     def task_arrival(self, task):
++        # todo: core assignment is not implemented here, as we only simulate with SpliwiseInstance. If to use this class,
++        # core assignment should be implemented.
+         task.instance = self
+         task.arrive()
+ 
+@@ -458,16 +503,20 @@ class ORCAInstance(Instance):
+         """
+         Start a new iteration of a batch of tasks.
+         """
++        # subtasks: 1
+         # select a new batch of tasks to run
+         preempted_tasks, new_tasks = self.select_batch()
+ 
++        # subtasks: 2
+         for task in preempted_tasks:
+             self.preempt_task(task)
+ 
++        # subtasks: 3
+         for task in new_tasks:
+             self.remove_pending_task(task)
+             self.add_to_batch(task)
+ 
++        # subtasks: 4
+         for request in self.pending_requests:
+             task = self.request_tasks[request][0]
+             if task not in self.batch:
+@@ -490,6 +539,7 @@ class ORCAInstance(Instance):
+                 self.application.scheduler.notify_free_instance(self)
+             return
+ 
++        # subtasks: 5
+         # estimate duration of a single iteration
+         self.iteration_duration = get_iteration_duration(batch=self.batch,
+                                                          instance=self)
+@@ -515,8 +565,14 @@ class ORCAInstance(Instance):
+                 raise ValueError(f"Unexpected task state {task.state} in start_iteration")
+ 
+         self.completion_events["iteration"] = schedule_event(
+-                        self.iteration_duration * self.num_contiguous_iterations,
+-                        lambda instance=self: instance.complete_iteration())
++            self.iteration_duration * self.num_contiguous_iterations,
++            lambda instance=self: instance.complete_iteration())
++
++        # model cpu occupancy. note we do not model blocking time of mem. allocation for the inference flow.
++        instance = self
++        c_id, overhead, age_scaling =instance.cpu.assign_core_to_cpu_task(task=CpuTaskType.INFERENCE_ITERATION)
++        runtime = (self.iteration_duration * self.num_contiguous_iterations) + LINUX_RR_PROCESS_TIMESLICE * 5 * age_scaling
++        schedule_event(runtime + overhead, lambda c_id=c_id: instance.cpu.release_core_from_cpu_task(task_core_id=c_id))
+ 
+     def pause_iteration(self):
+         """
+@@ -546,10 +602,15 @@ class ORCAInstance(Instance):
+         contiguous_iteration_duration_new = self.iteration_duration * self.num_contiguous_iterations
+         remaining_time = contiguous_iteration_duration_new - elapsed_time
+ 
++        '''simulating core allocation for the rescheduled event below
++        Following event reduces the runtime of the current iteration. It mimics that the iteration process is still 
++        executing on the original core, but the runtime is reduced due to the rescheduling of the event. Thus no need 
++        for core allocation for this event.
++        '''
+         self.completion_events["iteration"] = reschedule_event(
+                             self.completion_events["iteration"], remaining_time)
+ 
+-    def complete_iteration(self):
++    def complete_iteration(self, core_id=None):
+         """
+         Complete an iteration of a batch tasks.
+         Tasks which complete leave the batch.
+@@ -573,7 +634,10 @@ class ORCAInstance(Instance):
+         self.pause_next_iteration = False
+         self.start_iteration()
+ 
+-    def task_completion(self, task):
++    def release_cpu_core(self, core_id):
++        self.cpu.release_core_from_cpu_task(task_core_id=core_id)
++
++    def task_completion(self, task, core_id=None):
+         """
+         Task completes within a batch.
+         """
+@@ -583,10 +647,11 @@ class ORCAInstance(Instance):
+         self.completed_queue.append(task)
+         task.executor.finish_task(task, self)
+ 
+-    def notify_flow_completion(self, flow):
++    def notify_flow_completion(self, flow, core_for_flow_completion_notify=None):
+         """
+         Notify instance of flow completion.
+         """
++
+         if len(self.pending_queue) == 0:
+             return
+ 
+@@ -604,6 +669,28 @@ class ORCAInstance(Instance):
+             self.pause_iteration()
+             return
+ 
++from enum import Enum
++
++# default overhead time is an indicative value. we use default timeslice of real-time process in linux kernel,
++# which is 100ms, assuming if none provided, task is treated as real-time process, in terms of the time slice.
++LINUX_RR_PROCESS_TIMESLICE = 0.1
++class CpuTaskType(Enum):
++    EXECUTOR_TASK = {"overhead_time": LINUX_RR_PROCESS_TIMESLICE, "info": "executor task"}
++    INSTANCE_MEM_FREE = {"overhead_time": LINUX_RR_PROCESS_TIMESLICE, "info": "instance mem free"}
++    INSTANCE_MEM_ALLOC = {"overhead_time": LINUX_RR_PROCESS_TIMESLICE, "info": "instance mem alloc"}
++    HANDLE_TASK_ARRIVAL = {"overhead_time": LINUX_RR_PROCESS_TIMESLICE, "info": "handle task arrival"}
++    INFERENCE_ITERATION = {"overhead_time": LINUX_RR_PROCESS_TIMESLICE, "info": "inference iteration"}
++    RUN_TASK = {"overhead_time": LINUX_RR_PROCESS_TIMESLICE, "info": "run task"}
++    FLOW_COMPLETION = {"overhead_time": LINUX_RR_PROCESS_TIMESLICE, "info": "flow completion"}
++    SIM_STATUS_UPDATE_TASK = {"overhead_time": 0.0, "info": "status update task for simulation"}
++
++class CpuTask:
++    task: CpuTaskType
++    meta: str
++
++    def __init__(self, task, meta):
++        self.task: CpuTaskType = task
++        self.meta = meta
+ 
+ class SplitwiseInstance(ORCAInstance):
+     """
+@@ -676,14 +763,17 @@ class SplitwiseInstance(ORCAInstance):
+         else:
+             raise ValueError(f"Unexpected task type {task.task_type} in remove_pending_task")
+ 
+-    def task_arrival(self, task):
++    def task_arrival(self, task, core_id_for_task_arrival_function=None):
++
+         task.instance = self
+         task.arrive()
+ 
++        # subtasks: 1
+         # add task to request pool and pending queue
+         self.add_to_pool(task)
+         self.add_pending_task(task)
+ 
++        # subtasks: 2
+         # if no tasks currently executing, start a new iteration
+         if len(self.batch) == 0:
+             # if instance is blocked due to memory constraints, do nothing
+diff --git a/interconnect.py b/interconnect.py
+index a75e508..73f125e 100644
+--- a/interconnect.py
++++ b/interconnect.py
+@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
+ from enum import IntEnum
+ 
+ from flow import Flow
++from instance import CpuTaskType, LINUX_RR_PROCESS_TIMESLICE
+ from processor import CPU, GPU
+ from simulator import clock, schedule_event, cancel_event, reschedule_event
+ from server import Server
+@@ -104,6 +105,13 @@ class Link():
+         flow.executor.finish_flow(flow, self)
+         if flow.notify:
+             flow.src.notify_flow_completion(flow)
++
++        # model cpu occupancy. note we do not model blocking time of mem. allocation for the inference flow.
++        instance = flow.src
++        c_id, overhead, age_scaling =instance.cpu.assign_core_to_cpu_task(task=CpuTaskType.FLOW_COMPLETION)
++        runtime = LINUX_RR_PROCESS_TIMESLICE * age_scaling
++        schedule_event(runtime + overhead, lambda c_id=c_id: instance.cpu.release_core_from_cpu_task(task_core_id=c_id))
++
+         self.bandwidth_used -= (self.bandwidth - self.bandwidth_used)
+         if len(self.pending_queue) > 0 and len(self.executing_queue) < self.max_flows:
+             next_flow = self.pending_queue[0]
+diff --git a/llm-ca_misc_plots.py b/llm-ca_misc_plots.py
+new file mode 100644
+index 0000000..01a3413
+--- /dev/null
++++ b/llm-ca_misc_plots.py
+@@ -0,0 +1,48 @@
++import numpy as np
++import matplotlib.pyplot as plt
++import matplotlib as mpl
++
++mpl.rcParams["font.size"] = 12
++
++
++def plot_reaction_function():
++    # Create separate x-arrays for negative and positive domains
++    x_neg = np.linspace(-1, 0, 500, endpoint=False)  # negative part
++    x_pos = np.linspace(0, 1, 500)  # positive part
++
++    # Define the piecewise y-values
++    y_neg = np.arctan(1.55 * x_neg)  # for x < 0
++    y_pos = np.tan(0.785 * x_pos)  # for x >= 0
++
++    # Create the plot
++    plt.figure(figsize=(4.5, 2.5))
++
++    # Plot each piece in its domain
++    plt.plot(x_pos, y_pos,
++             label='Underutilized', linewidth=3
++             )
++    plt.plot(x_neg, y_neg,
++             label='Oversubscribed', linewidth=3
++             )
++
++    # Set axes limits
++    plt.xlim([-1, 1])
++    plt.ylim([-1, 1])
++
++    # Labels and legend
++    plt.xlabel('Normalized Error (' + r'$e_{t\_prd}$' + ')')
++    plt.ylabel('Reaction Function (' + r'$F$' + ')')
++    #plt.title('Piecewise Function Plot')
++    plt.grid(which='major', linestyle='-', linewidth=0.7, alpha=0.8)
++    plt.grid(which='minor', linestyle=':', linewidth=0.5, alpha=0.7)
++    plt.minorticks_on()
++    plt.tight_layout()
++    plt.legend()
++
++    # Display the plot
++    plt.savefig('results_cpu/reaction_function.svg')
++
++
++# Example usage
++if __name__ == "__main__":
++    plot_reaction_function()
+diff --git a/llm-ca_perf_metric_plots.py b/llm-ca_perf_metric_plots.py
+new file mode 100644
+index 0000000..cf766f8
+--- /dev/null
++++ b/llm-ca_perf_metric_plots.py
+@@ -0,0 +1,406 @@
++import ast
++import os
++import re
++
++import numpy as np
++import pandas as pd
++from matplotlib import pyplot as plt
++import matplotlib as mpl
++
++mpl.rcParams["font.size"] = 12
++
++CODE_PREFIX = "rr_code_"
++
++CONV_PREFIX = "rr_conv_"
++
++IDENTITY_MAP = {
++    'linux': {
++        'color': '#E9002D',
++        'marker': 'o'
++    },
++    'least-aged': {
++        'color': '#FFAA00',
++        'marker': 'v'
++    },
++    'proposed': {
++        'color': '#008000',
++        'marker': 's'
++    },
++}
++
++
++def list_dirs(root):
++    return [folder for folder in os.listdir(root) if os.path.isdir(os.path.join(root, folder))]
++
++
++def list_files(root, prefix=None):
++    return [file for file in os.listdir(root) if
++            not os.path.isdir(os.path.join(root, file)) and file.startswith(prefix)]
++
++
++def process_machine(m_df):
++    # group by column 'id' and traverse each group
++    core_health_dst_after = []
++    core_health_dst_before = []
++    est_core_fq_before = 1.0
++    est_core_fq_after = 1.0
++    for name, core_data in m_df.groupby('id'):
++        core_data = core_data.sort_values(by='clock')
++        # get the last row
++        first_row = core_data.iloc[0]
++        last_row = core_data.iloc[-1]
++        core_fq_before = first_row['health']  # health is frequency normalized.
++        core_fq_after = last_row['health']  # health is frequency normalized.
++
++        core_health_dst_after.append(core_fq_after)
++        core_health_dst_before.append(core_fq_before)
++
++        if core_fq_before < est_core_fq_before:
++            est_core_fq_before = core_fq_before
++
++        if core_fq_after < est_core_fq_after:
++            est_core_fq_after = core_fq_after
++
++    # calculate the coefficient of variation
++    m_core_health_cv = np.std(core_health_dst_after) / np.mean(core_health_dst_after)
++
++    est_core_fq_drop = np.mean(core_health_dst_before) - np.mean(core_health_dst_after)
++
++    return m_core_health_cv, est_core_fq_after, est_core_fq_before, est_core_fq_drop
++
++
++def process_cpu_usage_files(cpu_data_loc, m_cpu_usage):
++    cls_m_core_health_cv_dst = []
++    cls_m_core_worst_fq_dst_before = []
++    cls_m_core_worst_fq_dst_after = []
++    cls_m_est_core_fq_drops = []
++    for machine in m_cpu_usage:
++        m_df = pd.read_csv(os.path.join(cpu_data_loc, machine))
++        m_core_health_cv, worst_core_fq_after, worst_core_fq_before, est_core_fq_drop = process_machine(m_df)
++        cls_m_core_health_cv_dst.append(m_core_health_cv)
++        cls_m_core_worst_fq_dst_after.append(worst_core_fq_after)
++        cls_m_core_worst_fq_dst_before.append(worst_core_fq_before)
++        cls_m_est_core_fq_drops.append(est_core_fq_drop)
++
++    cls_m_core_health_cv_p99 = np.percentile(cls_m_core_health_cv_dst, 99)
++    cls_m_core_health_cv_p90 = np.percentile(cls_m_core_health_cv_dst, 90)
++    cls_m_core_health_cv_p50 = np.percentile(cls_m_core_health_cv_dst, 50)
++
++    cls_m_core_worst_fq_p99_after = np.percentile(cls_m_core_worst_fq_dst_after, 99)
++    cls_m_core_worst_fq_p90_after = np.percentile(cls_m_core_worst_fq_dst_after, 90)
++    cls_m_core_worst_fq_p50_after = np.percentile(cls_m_core_worst_fq_dst_after, 50)
++
++    cls_m_core_worst_fq_p99_before = np.percentile(cls_m_core_worst_fq_dst_before, 99)
++    cls_m_core_worst_fq_p90_before = np.percentile(cls_m_core_worst_fq_dst_before, 90)
++    cls_m_core_worst_fq_p50_before = np.percentile(cls_m_core_worst_fq_dst_before, 50)
++
++    cls_m_est_core_fq_drops_p99 = np.percentile(cls_m_est_core_fq_drops, 99)
++    cls_m_est_core_fq_drops_p90 = np.percentile(cls_m_est_core_fq_drops, 90)
++    cls_m_est_core_fq_drops_p50 = np.percentile(cls_m_est_core_fq_drops, 50)
++
++    return {
++        "cls_m_core_health_cv_p99": cls_m_core_health_cv_p99,
++        "cls_m_core_health_cv_p90": cls_m_core_health_cv_p90,
++        "cls_m_core_health_cv_p50": cls_m_core_health_cv_p50,
++        "cls_m_core_worst_fq_p99_after": cls_m_core_worst_fq_p99_after,
++        "cls_m_core_worst_fq_p90_after": cls_m_core_worst_fq_p90_after,
++        "cls_m_core_worst_fq_p50_after": cls_m_core_worst_fq_p50_after,
++        "cls_m_core_worst_fq_p99_before": cls_m_core_worst_fq_p99_before,
++        "cls_m_core_worst_fq_p90_before": cls_m_core_worst_fq_p90_before,
++        "cls_m_core_worst_fq_p50_before": cls_m_core_worst_fq_p50_before,
++        "cls_m_est_core_fq_drops_p99": cls_m_est_core_fq_drops_p99,
++        "cls_m_est_core_fq_drops_p90": cls_m_est_core_fq_drops_p90,
++        "cls_m_est_core_fq_drops_p50": cls_m_est_core_fq_drops_p50,
++    }
++
++
++def process_task_data_files(cpu_data_loc, m_task_log, cores):
++    tot_nrm_diffs = pd.DataFrame(columns=['nrm_diff'])
++    for machine in m_task_log:
++        m_df = pd.read_csv(os.path.join(cpu_data_loc, machine))
++        m_df = pd.DataFrame(ast.literal_eval(m_df["tasks_count"].loc[0]),
++                            columns=['clock', 'running_tasks', 'gpu_mem_util', 'awaken_cores'])
++        m_df['nrm_diff'] = (m_df['awaken_cores'] - m_df[
++            'running_tasks']) / cores  # 112 = total cores of the servers in the cluster
++
++        # expand tot_nrm_diffs
++        tot_nrm_diffs = pd.concat([tot_nrm_diffs, m_df[['nrm_diff']]], ignore_index=True)
++    return tot_nrm_diffs
++
++
++def process_exps(root, exps, prefix, technique, cores):
++    parsed_cpu_health_data = []
++    parsed_nrm_core_to_task_diff_dst = pd.DataFrame(columns=['nrm_diff', 'technique', 'rate', 'cores'])
++    for exp in exps:
++        print(f"Processing {exp}")
++        rq_rate = exp.split(prefix)[1]
++        cpu_data_loc = os.path.join(root, exp, "0_22", "bloom-176b", "mixed_pool", "cpu_usage")
++        m_cpu_usage = list_files(root=cpu_data_loc, prefix="cpu_usage_")
++        m_task_log = list_files(root=cpu_data_loc, prefix="task_log_")
++
++        cpu_data = process_cpu_usage_files(cpu_data_loc, m_cpu_usage)
++        cpu_data["cores"] = cores
++        cpu_data["technique"] = technique
++        cpu_data["rate"] = rq_rate
++        parsed_cpu_health_data.append(cpu_data)
++
++        cls_nrm_core_to_task_diff_dst = process_task_data_files(cpu_data_loc, m_task_log, cores)
++        cls_nrm_core_to_task_diff_dst["cores"] = cores
++        cls_nrm_core_to_task_diff_dst['technique'] = technique
++        cls_nrm_core_to_task_diff_dst['rate'] = rq_rate
++        parsed_nrm_core_to_task_diff_dst = pd.concat([parsed_nrm_core_to_task_diff_dst, cls_nrm_core_to_task_diff_dst],
++                                                     ignore_index=True)
++
++    return parsed_cpu_health_data, parsed_nrm_core_to_task_diff_dst
++
++
++def plot_core_task_diff_data(df):
++    rates_colors = {
++        '40': '#4053d3',
++        '60': '#ddb310',
++        '80': '#b51d14',
++        '100': '#00beff',
++        '230': '#fb49b0',
++        '250': '#00b25d',
++    }
++
++    vm_cores = [40, 80, 112]
++    for cores in vm_cores:
++        filt_df = df[df["cores"] == cores]
++        rates = filt_df["rate"].unique()
++        n_rates = len(rates)
++        techniques = ['linux', 'least-aged', 'proposed']
++
++        # Create subplots with one plot per rate
++        fig, axes = plt.subplots(nrows=1, ncols=len(techniques), figsize=(4 * len(techniques), 2.3), sharey=True,
++                                 sharex=True)
++
++        for i, tech in enumerate(techniques):
++
++            ax = axes[i]
++            tech_data = filt_df[filt_df["technique"] == tech]
++
++            p90_vals = []
++            p1_vals = []
++            ax.grid(True, zorder=0)
++            for rate in tech_data["rate"].unique():
++                rate_data = tech_data[tech_data["rate"] == rate]
++                sorted_nrm_diff = sorted(rate_data["nrm_diff"])
++                cumsum = np.cumsum(np.ones_like(sorted_nrm_diff)) / len(sorted_nrm_diff)
++                p90_val = np.percentile(sorted_nrm_diff, 90)
++                p1_val = np.percentile(sorted_nrm_diff, 1)
++                p90_vals.append(p90_val)
++                p1_vals.append(p1_val)
++
++                ax.plot(
++                    sorted_nrm_diff,
++                    cumsum,
++                    label=str(rate) + 'req/s',
++                    color=rates_colors[str(rate)],
++                )
++
++            plot_p90_val = round(max(p90_vals), 3)
++            plot_p1_val = round(min(p1_vals), 3)
++            ax.vlines(x=plot_p90_val, ymin=0.0, ymax=1.0, linewidth=0.7, linestyles='dashed', color='black',
++                      label=f'p90 = {plot_p90_val}')
++            ax.vlines(x=plot_p1_val, ymin=0.0, ymax=1.0, linewidth=0.7, linestyles='dashed', color='blue',
++                      label=f'p1 = {plot_p1_val}')
++
++            ax.set_title(f"{tech}")
++
++            if tech != "proposed":
++                ax.set_xlim([plot_p1_val, 1.0])
++            else:
++                ax.set_xlim([plot_p1_val, 1.0])
++
++            ax.set_xlabel("Normalized Idle CPU Cores")
++            if i == 0:
++                ax.set_ylabel("Cumulative\n Measurements")
++            handles, labels = ax.get_legend_handles_labels()
++            show_items = ['p90', 'p1']
++            filtered_handles = [h for h, l in zip(handles, labels) if any(sub in l for sub in show_items)]
++            filtered_labels = [l for l in labels if any(sub in l for sub in show_items)]
++            ax.legend(filtered_handles, filtered_labels)
++
++        # Adjust layout
++        # fig.suptitle("Idle CPU Cores Across the Cluster Machines")
++        handles, labels = ax.get_legend_handles_labels()
++        show_items = ['40req/s', '60req/s', '80req/s', '100req/s']
++        filtered_handles = [h for h, l in zip(handles, labels) if l in show_items]
++        filtered_labels = [l for l in labels if l in show_items]
++        fig.legend(filtered_handles, filtered_labels, bbox_to_anchor=(1.105, 0.75))
++        fig.tight_layout()
++        plt.savefig(
++            "results_cpu/core-utilization/vm-cores_" + str(cores) + "_core_availability_for_task_execution.svg",
++            bbox_inches='tight')
++
++
++def plot_core_health_cv(df):
++    # Extract unique traces and metric types
++    # unique_traces = df["trace"].unique()
++    metrics = ["cls_m_core_health_cv_p99", "cls_m_core_health_cv_p90", "cls_m_core_health_cv_p50",
++               "cls_m_est_core_fq_drops_p99", "cls_m_est_core_fq_drops_p90", "cls_m_est_core_fq_drops_p50",
++               "cls_m_core_worst_fq_p99_after", "cls_m_core_worst_fq_p90_after", "cls_m_core_worst_fq_p50_after",
++               "cls_m_core_worst_fq_p99_before", "cls_m_core_worst_fq_p90_before", "cls_m_core_worst_fq_p50_before"
++               ]
++    metrics_lbl = ["p99", "p90", "p50", "p99", "p90", "p50"]
++    vm_cores = [40, 80, 112]
++
++    def plot_row_data(df, tech_used, metrics, metrics_lbl, filename, cores, is_carbon_bars):
++        flt_df = df[df["cores"] == cores]
++        # Create subplots
++        if not is_carbon_bars:
++            fig, axes = plt.subplots(nrows=2, ncols=3, figsize=(2.5 * 3, 2.2 * 2), sharex=True, sharey='row')
++        else:
++            fig, axes = plt.subplots(nrows=1, ncols=3, figsize=(4.0 * 3, 3 * 0.82), sharex=True, sharey=True)
++        for j, metric in enumerate(metrics):
++            if not is_carbon_bars:
++                row_id = j // 3
++                ax = axes[row_id][j % 3]
++                ax.grid(True, zorder=0)
++                nrm_val = flt_df[metric].max()
++                max_val = flt_df[metric].max()
++                min_val = flt_df[metric].min()
++                for technique in tech_used:
++                    tech_data = flt_df[flt_df["technique"] == technique]
++                    offset_to_avoid_zero_in_log = 0.000001
++                    tech_data[metric] = (nrm_val - tech_data[metric] + offset_to_avoid_zero_in_log) / nrm_val
++                    ax.plot(
++                        tech_data['rate'],
++                        tech_data[metric],
++                        marker=IDENTITY_MAP[technique]['marker'],
++                        label=technique,
++                        color=IDENTITY_MAP[technique]['color']
++                    )
++
++                ax.set_xlabel("Request Rate (req/s)")
++
++                ax.set_yscale("log")
++
++                if row_id == 0:
++                    ax.set_ylabel(metrics_lbl[j] + ' Fq. CV Perf.' + '\n' + r'(1 - norm(fq. CV))')
++                else:
++                    ax.set_ylabel(metrics_lbl[j] + ' Mean Fq. Perf' + '\n' + r'(1 - norm(fq. drop))')
++
++            else:
++                if j > 2:  # we only draw a single row
++                    break
++
++                # plot quantified embodied carbon. Our model estimates based on the worst_fq values.
++                # ref: Li, et al: "Towards Carbon-efficient LLM Life Cycle" paper
++                tot_cls_emb_carbon = 278.3 * 22  # kgCO2eq per server * num. of servers
++                cls_refresh_cycle = 3  # existing systems with 3 years of lifespan. In ours, linux is the baseline for this.
++
++                fq_reduction_linux = flt_df[flt_df["technique"] == "linux"][metric]
++                ax_carbon = axes[j % 3]
++                tech_shift_2 = [-0.5, 0.5]
++                tech_shift_3 = [-1, 0, 1]
++                if len(tech_used) == 2:
++                    tech_shift = tech_shift_2
++                else:
++                    tech_shift = tech_shift_3
++                width = 5
++
++                ax_carbon.grid(True, zorder=0)
++                our_savings = []
++                yearly_emb_carbon_linux = tot_cls_emb_carbon / cls_refresh_cycle
++                for idx, technique in enumerate(tech_used):
++                    tech_data = flt_df[flt_df["technique"] == technique]
++                    fq_reduction_tech = tech_data[metric]
++                    ratios = fq_reduction_linux / fq_reduction_tech.values
++                    yearly_emb_carbon_tech = yearly_emb_carbon_linux * (1 / ratios)
++                    emb_carbon_savings = yearly_emb_carbon_linux - yearly_emb_carbon_tech.values
++                    if "proposed" in technique:
++                        our_savings.extend(emb_carbon_savings)
++
++                    ax_carbon.bar(tech_data['rate'] + tech_shift[idx] * width, yearly_emb_carbon_tech, width,
++                                  label=technique, color=IDENTITY_MAP[technique]['color'], edgecolor="black")
++
++                avg_savings_proposed = sum(our_savings) / len(our_savings)
++                avg_savings_perct = avg_savings_proposed / yearly_emb_carbon_linux
++                print("VM cores: " + str(cores) + "| average carbon reduction of proposed for " + metric + " is " + str(
++                    round(100 * avg_savings_perct, 3)) + "%")
++
++                ax_carbon.set_ylabel(r'$kgCO_2eq/year$')
++                ax_carbon.set_xlabel("Request Rate (req/s)")
++                ax_carbon.set_title(metrics_lbl[j] + ' Mean Freq.')
++
++        if not is_carbon_bars:
++            handles, labels = ax.get_legend_handles_labels()
++            fig.legend(handles, labels, bbox_to_anchor=(0.5, 1.05), ncol=len(tech_used), loc="upper center")
++            fig.tight_layout()
++            plt.minorticks_on()
++            plt.savefig("results_cpu/aging/vm-cores_" + str(cores) + "_" + filename, bbox_inches='tight')
++        else:
++            handles, labels = ax_carbon.get_legend_handles_labels()
++            fig.legend(handles, labels, bbox_to_anchor=(0.5, 1.1), ncol=len(tech_used), loc="upper center")
++            fig.tight_layout()
++            plt.minorticks_on()
++            plt.savefig("results_cpu/carbon-savings/vm-cores_" + str(cores) + "_" + filename, bbox_inches='tight')
++
++    for cores in vm_cores:
++        plot_row_data(df, ['linux', 'least-aged', 'proposed'], metrics[:6], metrics_lbl[:6],
++                      "aging-impact_baselines-vs-proposed.svg", cores, is_carbon_bars=False)
++        plot_row_data(df, ['linux', 'least-aged', 'proposed'], metrics[3:6], metrics_lbl[3:],
++                      "carbon-savings_baselines-vs-proposed.svg", cores, is_carbon_bars=True)
++
++
++ROOT_LOC = "/path/to/root/data/output/folder/experiments"
++"""At root experiments folder, create sub folder for each technique. Copy each 'rr_{code or conv}_{rate' folders to the relevant technique folder."""
++
++dev_is_plot_fix = True
++vm_types = list_dirs(root=ROOT_LOC)
++if not os.path.isfile('health_data_df.csv'):
++    dev_is_plot_fix = False
++
++if not dev_is_plot_fix:
++    tot_parsed_health_data_conv = []
++    health_data_df = None
++    tot_parsed_core_task_diff_data = pd.DataFrame(columns=['nrm_diff', 'technique', 'rate', 'cores'])
++    for vm_type in vm_types:
++        print(f"--- vm_type: {vm_type}")
++        vm_cores = int(re.search(r'vm(\d+)', vm_type).group(1))
++        techniques = list_dirs(root=os.path.join(ROOT_LOC, vm_type))
++        for technique in techniques:
++            print(f"Processing technique: {technique}")
++            curr_loc = os.path.join(ROOT_LOC, vm_type, technique)
++            traces = list_dirs(root=curr_loc)
++            conv_traces = [trace for trace in traces if CONV_PREFIX in trace]
++
++            parsed_health_data, parsed_core_task_diff_data = process_exps(root=curr_loc, exps=conv_traces,
++                                                                          prefix=CONV_PREFIX,
++                                                                          technique=technique,
++                                                                          cores=vm_cores)
++
++            tot_parsed_health_data_conv.extend(parsed_health_data)
++            tot_parsed_core_task_diff_data = pd.concat([tot_parsed_core_task_diff_data, parsed_core_task_diff_data],
++                                                       ignore_index=True)
++
++    health_data_df = pd.DataFrame(tot_parsed_health_data_conv)
++    health_data_df["cores"] = health_data_df["cores"].astype(int)
++    health_data_df["rate"] = health_data_df["rate"].astype(int)
++    health_data_df = health_data_df.sort_values(by=['rate'])
++
++    tot_parsed_core_task_diff_data["cores"] = tot_parsed_core_task_diff_data["cores"].astype(int)
++    tot_parsed_core_task_diff_data["rate"] = tot_parsed_core_task_diff_data["rate"].astype(int)
++    tot_parsed_core_task_diff_data = tot_parsed_core_task_diff_data.sort_values(by=['rate'])
++
++    print('saving data to cache...')
++    health_data_df.to_csv('health_data_df.csv', index=False)
++    tot_parsed_core_task_diff_data.to_csv('tot_parsed_core_task_diff_data.csv', index=False)
++else:
++    print("Loading data from cache...")
++
++
++    def dev_load_data_cache(cache_file_name):
++        if os.path.exists(cache_file_name):
++            return pd.read_csv(cache_file_name)
++        else:
++            return None
++
++
++    health_data_df = dev_load_data_cache('health_data_df.csv')
++    tot_parsed_core_task_diff_data = dev_load_data_cache('tot_parsed_core_task_diff_data.csv')
++
++plot_core_health_cv(df=health_data_df)
++plot_core_task_diff_data(df=tot_parsed_core_task_diff_data)
+diff --git a/llm-ca_plots_tasks-vs-time.py b/llm-ca_plots_tasks-vs-time.py
+new file mode 100644
+index 0000000..52817c2
+--- /dev/null
++++ b/llm-ca_plots_tasks-vs-time.py
+@@ -0,0 +1,100 @@
++import matplotlib.pyplot as plt
++import ast
++import pandas as pd
++import glob
++import os
++
++ROOT_LOC = "/path/to/root/data/output/folder"
++
++vm_types = ["dgx-h100-with-cpu-vm40", "dgx-h100-with-cpu-vm80", "dgx-h100-with-cpu-vm112"]
++# techniques=["linux", "least-aged", "proposed"]
++techniques = ["proposed"]
++
++is_overall = False
++
++for tech in techniques:
++    for vm_type in vm_types:
++        fig = None
++        if not is_overall:
++            fig, axes = plt.subplots(2, 2, figsize=(5 * 2, 2 * 2), sharey=True, sharex=True)
++
++        for i, rate in enumerate([str(rate) for rate in [40, 60, 80, 100]]):
++            top_root = ROOT_LOC
++            root = os.path.join(top_root, vm_type, tech)
++            rate_cmp = "/rr_conv_" + str(rate)
++            path = root + rate_cmp + "/0_22/bloom-176b/mixed_pool/cpu_usage"
++
++            if not os.path.exists(path):
++                print(rate, "do not exist")
++                continue
++            print(rate, "...")
++
++            # If not already in the given folder, change directory
++            os.chdir(path)
++
++            # Use glob to find all CSV files starting with 'task_log_'
++            csv_files = glob.glob('task_log_*.csv')
++
++            if is_overall:
++                fig, (ax1, ax2, ax3, ax4) = plt.subplots(4, 1, figsize=(16, 12))
++
++            # Load each CSV file into a DataFrame
++            # max_tasks_log = []
++            machine_tasks = []
++            for file in csv_files:
++                df = pd.read_csv(file)
++                data_string = df["tasks_count"].iloc[0]
++                # Convert the string to a list of tuples
++                data = ast.literal_eval(data_string)
++
++                # Separate the data into two lists: clock times and number of tasks
++                clock_times = [item[0] for item in data if 1 < item[0] < 599]
++                number_of_tasks = [item[1] for item in data if 1 < item[0] < 599]
++                mem_util = [item[2] for item in data if 1 < item[0] < 599]
++                awaken_cores = [item[3] for item in data if 1 < item[0] < 599]
++
++                # max_tasks_log.append(max(number_of_tasks))
++                machine_tasks.append(number_of_tasks)
++
++                # Plot the data
++                if is_overall:
++                    ax1.plot(clock_times, number_of_tasks)
++                    ax2.plot(clock_times, awaken_cores)
++                    ax3.plot(clock_times, mem_util)
++
++            # for each list in the machine_tasks, plot a box plot on ax4
++            if is_overall:
++                ax4.violinplot(machine_tasks)
++
++                ax1.set_title('Tasks For rate' + str(rate))
++                ax1.set_xlabel('Clock Time')
++                ax1.set_ylabel('Number of Tasks')
++
++                ax2.set_title('Awaken cores For rate' + str(rate))
++                ax2.set_xlabel('Clock Time')
++                ax2.set_ylabel('Number of Awaken Cores')
++
++                ax3.set_title('Memory For rate' + str(rate))
++                ax3.set_xlabel('Clock Time')
++                ax3.set_ylabel('Memory Util.')
++
++                ax4.set_title('Running tasks dist. For rate' + str(rate))
++                ax4.set_xlabel('Machine Number')
++                ax4.set_ylabel('Distributions')
++
++                plt.grid(True, zorder=0)
++                plt.tight_layout()
++                plt.savefig("./results_cpu/tasks" + vm_type + '_' + tech + '_' + str(rate) + ".svg")
++            else:
++                ax = axes[i // 2][(i % 2)]
++                ax.violinplot(machine_tasks)
++
++                ax.set_xlabel('Machine Number')
++                ax.set_ylabel(f'Task Count at Req./s: {rate}')
++                ax.set_xticks(range(1, len(machine_tasks) + 1))
++                ax.grid(True, zorder=0)
++
++        if not is_overall:
++            plt.grid(True, zorder=0)
++            plt.tight_layout()
++            plt.savefig("./results_cpu/tasks" + vm_type + '_' + tech + '_running_tasks.svg')
+diff --git a/performance_model.py b/performance_model.py
+index 983360f..d540b6b 100644
+--- a/performance_model.py
++++ b/performance_model.py
+@@ -6,6 +6,7 @@ from abc import ABC, abstractmethod
+ import pandas as pd
+ 
+ from hydra.utils import get_original_cwd
++from joblib.externals.cloudpickle import instance
+ from scipy.interpolate import interp1d
+ 
+ from task import TaskType, PromptTask, TokenTask
+@@ -214,7 +215,9 @@ class DatabasePerformanceModel(PerformanceModel):
+         i.e., we currently do not support prompt chunking.
+         """
+         model = instance.model.name
+-        hardware = instance.processors[0].name
++        # todo: currently only supports for gpus.
++        hardware = next(p for p in instance.processors if p.processor_type.value == 2).name
++        #hardware = instance.processors[0].name
+         pipeline_parallel = instance.model.parallelism.pipeline_parallelism
+         tensor_parallel = instance.model.parallelism.tensor_parallelism
+ 
+diff --git a/processor.py b/processor.py
+index ce82bbf..b4a2d73 100644
+--- a/processor.py
++++ b/processor.py
+@@ -1,11 +1,97 @@
+-import logging
++import csv
++import math
+ import os
+-
++import uuid
+ from dataclasses import dataclass, field
+ from enum import IntEnum
+ 
+-from instance import Instance
+-from simulator import clock, schedule_event, cancel_event, reschedule_event
++from core_power import CStates, calculate_core_power, get_c_state_from_idle_governor, APPROX_INFINITY_S, \
++    calc_aged_freq, Temperatures, CPU_CORE_ADJ_INTERVAL, \
++    calc_long_term_vth_shift, gen_init_fq
++from core_residency import task_schedule_linux
++from instance import Instance, CpuTaskType
++from simulator import clock
++
++
++CORE_IS_FREE = ''
++ENABLE_DEBUG_LOGS = False
++
++CPU_CONFIGS = None
++
++
++class Core:
++    """A core in the cpu"""
++    MAX_FQ = 0.0
++
++    # init for all params.
++    def __init__(self, processor_id: uuid, id: int, f_init: float = 2.25 * math.pow(10, 9), temp_init=54):
++        # keep track of max frequency for normalization purpose.
++        if Core.MAX_FQ < f_init:
++            Core.MAX_FQ = f_init
++
++        self.id = id
++        self.processor_id = processor_id
++        self.task = None
++        self.c_state = CStates.C1.value
++        self.last_idle_durations = []
++        self.last_idle_set_time = 0.0
++        self.temp = temp_init
++        self.freq = f_init
++        self.freq_0 = f_init
++        self.last_state_change_time = 0.0
++        self.vth_shift = 0.0
++        self.cum_aged_time = 0.0
++        self.freq_nominal = 2.25 * math.pow(10, 9)  # AMD EPCY 7742 base frequency is 2.25 GHz
++        self.forced_to_sleep = False
++        self.last_temp_update = 0.0
++
++    def set_temp(self, new_temp):
++        clk = clock()
++
++        # update aging effects.
++        prev_period_tmp = self.temp
++        was_sleep = self.forced_to_sleep
++        prev_period_length = clk - self.last_temp_update
++
++        if was_sleep:
++            self.vth_shift = self.vth_shift
++        else:
++            self.vth_shift = calc_long_term_vth_shift(vth_old=self.vth_shift, t_temp=prev_period_tmp,
++                                                      t_length=prev_period_length)
++        self.cum_aged_time += prev_period_length
++        fq_new = calc_aged_freq(initial_freq=self.freq_0, cum_delta_vth=self.vth_shift)
++        self.freq = fq_new
++
++        # set new core temperature.
++        self.temp = new_temp
++        self.last_temp_update = clk
++
++    def __str__(self):
++        return (
++            f"Core(id={self.id}, "
++            f"task={self.task}, "
++            f"c_state={self.c_state}, "
++            f"last_idle_durations={self.last_idle_durations}, "
++            f"last_idle_set_time={self.last_idle_set_time})"
++        )
++
++    def get_record(self):
++        return {
++            'id': self.id,
++            'task': self.task,
++            'c_state': self.c_state.state,
++            'last_idle_durations': self.last_idle_durations,
++            'last_idle_set_time': self.last_idle_set_time,
++            'temp_c': self.temp,
++            'freq': self.freq,
++            'health': self.get_health(),
++            'cum_aged_time': self.cum_aged_time,
++            'cum_vth_delta': self.vth_shift,
++        }
++
++    def get_health(self):
++        # return self.freq / self.freq_0
++        return self.freq / Core.MAX_FQ
+ 
+ 
+ class ProcessorType(IntEnum):
+@@ -85,7 +171,7 @@ class Processor():
+                 csv_entry.append(len(instance.pending_queue))
+                 f.write(",".join(map(str, csv_entry)) + "\n")
+             # raise OOM error
+-            #raise ValueError("OOM")
++            # raise ValueError("OOM")
+         self._memory_used = memory_used
+ 
+     @property
+@@ -109,9 +195,373 @@ class Processor():
+         pass
+ 
+ 
++def task_schedule_least_aged(cpu_cores):
++    """Zhao et al. 2023:
++    Proposes a task scheduling approach that can be enforced at the resource management level.
++    We employ it at the cloud orchestration level. The idea behind the approach is, 'the OS can migrate and
++     swap affinitized threads from one core that has significantly aged or thermally loaded to another core'. It requires
++     aging of the core and move the tasks, which essentially signals to balance the load across the cores according
++     to the age status. Since inference tasks are short-lived, we do not migrate tasks, but at the task-to-core allocation
++     level, we select the cores to balance the load according to the health.
++     """
++    selected_core = None
++    for core in cpu_cores:
++        if core.task is not None:  # avoid already allocated cores.
++            continue
++
++        if selected_core is None:  # if a core has not chosen yet, select the first core.
++            selected_core = core
++            continue
++
++        # select the core with the highest health.
++        selected_core_health = selected_core.get_health()
++        core_health = core.get_health()
++        if core_health > selected_core_health:
++            selected_core = core
++
++    # if none, pick the first free core.
++    if selected_core is None:
++        for core in cpu_cores:
++            if core.task is None:
++                selected_core = core
++                break
++
++    return selected_core
++
++
++def task_schedule_proposed(cpu_cores):
++    selected_core = None
++    selected_idle_score = 0.0
++    for core in cpu_cores:
++        if core.task is not None:  # avoid already busy cores.
++            continue
++
++        idle_score = sum(core.last_idle_durations)  # tap into the idle subsystem to even-out core usage
++        if selected_core is None or idle_score > selected_idle_score:
++            selected_core = core
++            selected_idle_score = idle_score
++
++    # if none, pick the first free core.
++    if selected_core is None:
++        for core in cpu_cores:
++            if core.task is None:
++                selected_core = core
++                break
++
++    return selected_core
++
++
+ @dataclass(kw_only=True)
+ class CPU(Processor):
+     processor_type: ProcessorType = ProcessorType.CPU
++    core_count: int
++    cpu_idx: int = 0
++
++    def __post_init__(self):
++
++        self.id = uuid.uuid4()
++        self.cpu_cores = None  # init later. check 'init_fqs' method.
++        self.core_activity_log = []
++        self.oversubscribed_task_count_log = 0
++        self.total_task_count_log = 0
++
++        self.temp_T_ts = []
++        self.temp_running_tasks = []
++        self.temp_running_tasks_counter = 0
++
++        # manage core sleeping.
++        self.core_oversubscribe_tasks = {
++            "past_e_t": [],
++            "core_oversubscribe_tasks": 0,
++            "last_core_adjust_time": 0.0,
++            "core_adjust_dt": CPU_CORE_ADJ_INTERVAL,
++            "err_integral": 0.0,
++            "prev_error": 0.0,
++        }
++
++        self.sleep_manager_logs = []
++
++    def init_fqs(self, server_id):
++        process_variation_induced_initial_core_fq = self.get_pv_induced_fqs(server_id)
++        # initial temperature is 54 degrees celcius. Data modelled after experiments from Green Core testbed.
++        self.cpu_cores = [Core(processor_id=self.id, id=idx, f_init=init_fq, temp_init=Temperatures.C0_POLL.value) for
++                          idx, init_fq in
++                          enumerate(process_variation_induced_initial_core_fq)]
++
++    def get_pv_induced_fqs(self, server_id):
++        def load_or_generate_frequencies(file_path, server_id, n_cores):
++            if not os.path.exists(file_path):
++                with open(file_path, 'w', newline='', encoding='UTF-8') as file:
++                    writer = csv.writer(file)
++                    writer.writerow(["server_id", "core_frequencies"])  # Write header
++                generated_frequencies = gen_init_fq(n_cores=n_cores)
++                with open(file_path, 'a', newline='', encoding='UTF-8') as file:
++                    writer = csv.writer(file)
++                    writer.writerow([server_id, ','.join(map(str, generated_frequencies))])
++                return generated_frequencies
++
++            with open(file_path, 'r', newline='', encoding='UTF-8') as file:
++                reader = csv.DictReader(file)
++                for row in reader:
++                    if row["server_id"] == str(server_id):
++                        return list(map(float, row["core_frequencies"].split(',')))
++
++            generated_frequencies = gen_init_fq(n_cores=n_cores)
++            with open(file_path, 'a', newline='', encoding='UTF-8') as file:
++                writer = csv.writer(file)
++                writer.writerow([server_id, ','.join(map(str, generated_frequencies))])
++            return generated_frequencies
++
++        absolute_directory = os.path.dirname(os.path.abspath(__file__))
++        frequency_file_path = os.path.join(absolute_directory, 'cpu_core_frequencies.csv')
++        process_variation_induced_initial_core_fq = load_or_generate_frequencies(frequency_file_path, server_id,
++                                                                                 self.core_count)
++        return process_variation_induced_initial_core_fq
++
++    def assign_core_to_cpu_task(self, task, override_task_description=None):
++        # total running tasks
++        self.temp_running_tasks_counter += 1
++
++        # gpu memory usage
++        mem_used = 0.0
++        mem_total = 0.0
++        for p in self.server.processors:
++            if p == self:
++                continue
++            mem_used += p.memory_used
++            mem_total += p.memory_size
++        mem_util = mem_used / mem_total
++
++        # core sleep management
++        awaken_cores = len(list(filter(lambda c: not c.forced_to_sleep, self.cpu_cores)))
++
++        # log entry
++        self.temp_running_tasks.append([clock(), self.temp_running_tasks_counter, mem_util, awaken_cores])
++
++        self.total_task_count_log += 1
++
++        # assign logic
++        assigned_core, time_to_wake = self.get_a_core_to_assign()
++        if assigned_core is None:
++            self.oversubscribed_task_count_log += 1
++            self.core_oversubscribe_tasks['core_oversubscribe_tasks'] = self.core_oversubscribe_tasks[
++                                                                            'core_oversubscribe_tasks'] + 1
++            return -1, 0.0, 1  # there was no free core to assign. Task is assumed to be oversubscribing cpu.
++
++
++        # set the core to serve
++        assigned_core.task = task.value["info"]
++        if override_task_description is not None:
++            assigned_core.task = override_task_description
++        assigned_core.c_state = CStates.C0.value  # set core to busy
++        assigned_core.set_temp(new_temp=Temperatures.C0_RTEVAL.value)
++        assigned_core.last_idle_durations.append(clock() - assigned_core.last_idle_set_time)
++        assigned_core.last_idle_set_time = None
++
++        # maintain a list of last 8 idle durations
++        if len(assigned_core.last_idle_durations) == 9:
++            assigned_core.last_idle_durations.pop(0)
++
++        age_induced_freq_scaling_factor = assigned_core.freq / assigned_core.freq_nominal
++
++        self.log_cpu_state(core=assigned_core, time_to_wake=time_to_wake)
++        return assigned_core.id, time_to_wake, age_induced_freq_scaling_factor
++
++    def release_core_from_cpu_task(self, task_core_id):
++        self.temp_running_tasks_counter -= 1
++
++        if task_core_id == -1:
++            self.core_oversubscribe_tasks['core_oversubscribe_tasks'] = self.core_oversubscribe_tasks[
++                                                                            'core_oversubscribe_tasks'] - 1
++            return
++
++        # free the core
++        core = list(filter(lambda c: c.id == task_core_id, self.cpu_cores))[0]
++        self.free(core)
++
++    def free(self, core):
++        core.task = None
++        core.c_state = CStates.C1.value  # set core to idle
++        # update core idle state
++        next_c_state = get_c_state_from_idle_governor(last_8_idle_durations_s=core.last_idle_durations,
++                                                      latency_limit_core_wake_s=APPROX_INFINITY_S)
++        core.c_state = next_c_state
++        core.set_temp(new_temp=next_c_state.temp.value)
++        core.last_idle_set_time = clock()
++        self.log_cpu_state(core=core, time_to_wake=None)
++
++    def adjust_sleeping_cores(self):
++
++        # cores
++        N = len(self.cpu_cores)
++
++        active_cores = len(list(filter(lambda c: not c.forced_to_sleep, self.cpu_cores)))
++        C_SLP_t = N - active_cores
++
++        # tasks
++        oversub_tasks = self.core_oversubscribe_tasks["core_oversubscribe_tasks"]
++        normal_tasks = len(list(filter(lambda c: c.task is not None and not c.forced_to_sleep, self.cpu_cores)))
++        T_t = normal_tasks + oversub_tasks
++        self.temp_T_ts.append(T_t)
++
++        # assumed in llm inference servers number of available cores are excessive.
++        # this is an algorithmic estimation, not
++        # a part of the system model.
++        # algorithm performs online optimization based on this assumption.
++        T_t = min(N, T_t)
++
++        # error signal
++        e_t = N - C_SLP_t - T_t
++
++        e_t_prd = e_t
++
++        # normalize
++        e_t_prd = e_t_prd / N
++
++        # apply reaction function
++        F_e_t_prd = e_t_prd
++        if e_t_prd >= 0:
++            F_e_t_prd = math.tan(0.785 * e_t_prd)
++        else:
++            F_e_t_prd = math.atan(1.55 * e_t_prd)
++
++        # scale up
++        e_t_corr = N * F_e_t_prd
++
++        # final error signal
++        e_t_corr = int(e_t_corr)
++
++        # put cores to sleep
++        delta_cores = abs(e_t_corr)
++        if e_t_corr > 0:
++            self.put_to_sleep(to_sleep=delta_cores, cores=self.cpu_cores)
++        elif e_t_corr < 0:
++            self.put_to_wake(to_wake=delta_cores, cores=self.cpu_cores)
++
++        self.sleep_manager_logs.append({
++            'clock': clock(),
++            'oversub_tasks': oversub_tasks,
++            'normal_tasks': normal_tasks,
++            'T_t': T_t,
++            'active_cores': active_cores,
++            'asleep_cores': len(self.cpu_cores) - active_cores,
++        })
++
++    def get_a_core_to_assign(self):
++
++        """Algorithm assigning a core to a task"""
++        import configparser
++
++        def load_properties(file_path):
++            config = configparser.ConfigParser()
++            # ConfigParser requires section headers, so we add a fake one
++            absolute_directory = os.path.dirname(os.path.abspath(__file__))
++            with open(os.path.join(absolute_directory, file_path), 'r') as file:
++                properties_data = f"[DEFAULT]\n{file.read()}"
++            config.read_string(properties_data)
++            return config['DEFAULT']
++
++        global CPU_CONFIGS
++        if CPU_CONFIGS is None:
++            CPU_CONFIGS = load_properties('cpu_configs.properties')
++
++        # omit allocating sleeping cores.
++        awaken_cores = list(filter(lambda c: not c.forced_to_sleep, self.cpu_cores))
++
++        task_allocation_algo = CPU_CONFIGS.get("task_allocation_algo")
++        if task_allocation_algo == "linux":
++            assigned_core = task_schedule_linux(cpu_cores=awaken_cores)
++        elif task_allocation_algo == "least-aged":
++            assigned_core = task_schedule_least-aged(cpu_cores=awaken_cores)
++        elif task_allocation_algo == "proposed":
++            assigned_core = task_schedule_proposed(cpu_cores=awaken_cores)
++        else:
++            raise ValueError(f"Unknown task allocation algorithm: {task_allocation_algo}")
++
++        if assigned_core is None:
++            return None, None
++
++        transition_latency = assigned_core.c_state.transition_time_s
++        assigned_core.c_state = CStates.C1.value  # set core to idle
++        return assigned_core, transition_latency
++
++    def trigger_state_update(self):
++        """update states at the end of the simulation"""
++        '''
++        Releasing a task from the core updates multiple stats, such as aging. In the simulation, core status is 
++        only updated either a task is assigned or released. However, in cases such as a task was never assigned,
++        or the time between task release and end of the simulation, we need to still update stats, such as the 
++        aging occur due to idle temperature. So we assign a completion task and release the core.
++        '''
++        for _ in self.cpu_cores:
++            self.assign_core_to_cpu_task(task=CpuTaskType.SIM_STATUS_UPDATE_TASK)  # assign to next free core.
++        for core in self.cpu_cores:
++            self.release_core_from_cpu_task(core.id)  # release from each core.
++
++    def log_cpu_state(self, core=None, time_to_wake=None):
++        if core is None:
++            for core in self.cpu_cores:
++                self.core_activity_log.append({
++                    'clock': clock(),
++                    'id': core.id,
++                    'task': core.task,
++                    'c-state': core.c_state.state,
++                    'power': calculate_core_power(c_state=core.c_state, model=core.task),
++                    'temp': core.temp,
++                    'freq': core.freq,
++                })
++
++        core_state = core.get_record()
++        core_state['clock'] = clock()
++        core_state['c_state_wake_latency'] = time_to_wake
++        self.core_activity_log.append(core_state)
++
++    def put_to_sleep(self, to_sleep, cores):
++        """
++        Amongst awaken cores, filter free cores. Then sleep the amount of cores having the lowest health.
++        """
++        free_awake_cores = list(filter(lambda c: c.task is None and not c.forced_to_sleep, cores))
++
++        # health is calculated as the current degraded frequency over the nominal frequency.
++        free_awake_cores = sorted(free_awake_cores, key=lambda c: c.get_health())  # health low to high.
++        sleep_count = 0
++        for idx in range(len(free_awake_cores)):
++            core = free_awake_cores[idx]
++            # self.update_aging(core)
++            self.force_sleep(core)
++            self.log_cpu_state(core=core, time_to_wake=None)
++            sleep_count += 1
++            if sleep_count >= to_sleep:
++                break
++
++    def put_to_wake(self, to_wake, cores):
++        """
++        Amongst awaken cores, filter free cores. Then sleep the amount of cores having the lowest health.
++        """
++        asleep_cores = list(filter(lambda c: c.forced_to_sleep, cores))
++
++        # health is calculated as the current degraded frequency over the nominal frequency.
++        asleep_cores = sorted(asleep_cores, key=lambda c: c.get_health(), reverse=True)  # health low to high.
++        wake_count = 0
++        for idx in range(len(asleep_cores)):
++            core = asleep_cores[idx]
++            # self.update_aging(core)
++            self.force_wake(core)
++            self.log_cpu_state(core=core, time_to_wake=None)
++            wake_count += 1
++            if wake_count >= to_wake:
++                break
++
++    def force_sleep(self, core):
++        core.set_temp(new_temp=Temperatures.C6.value)  # needs to be at top.
++        core.forced_to_sleep = True
++        core.task = None
++        core.c_state = CStates.C6.value
++
++    def force_wake(self, core):
++        core.set_temp(new_temp=Temperatures.C0_POLL.value)  # needs to be at top.
++        core.forced_to_sleep = False
++        core.c_state = CStates.C1.value
+ 
+ 
+ @dataclass(kw_only=True)
+diff --git a/run_cpu_experiments.sh b/run_cpu_experiments.sh
+new file mode 100755
+index 0000000..82200d8
+--- /dev/null
++++ b/run_cpu_experiments.sh
+@@ -0,0 +1,60 @@
++#!/bin/bash
++
++ROOT_EXP_DATA_OUTPUT_FOLDER="/path/to/root/data/output/folder"
++
++# Run the clean.sh script in the same folder
++./clean.sh
++
++# Define the types
++#types=("code" "conv")
++types=("conv")
++
++# all
++#rates=("30" "40" "50" "60" "70" "80" "90" "100" "110" "120" "130" "140" "150" "160" "170" "180" "190" "200" "210" "220" "230" "240" "250")
++#rates=("30" "40" "50" "60" "70" "80" "90" "100" "110" "120" "130" "140" "150")
++#rates=("130" "150" "170" "190" "200")
++#rates=("30")
++#rates=("30" "80" "130" "180" "230" "250")
++rates=("40" "60" "80" "100")
++
++# debug
++#rates=("30")
++
++# https://learn.microsoft.com/en-us/azure/virtual-machines/sizes/gpu-accelerated/ncadsh100v5-series?tabs=sizebasic
++vm_types=("dgx-h100-with-cpu-vm40" "dgx-h100-with-cpu-vm80" "dgx-h100-with-cpu-vm112") # Standard_NC40ads_H100_v5, Standard_NC80ads_H100_v5, full machine
++
++techniques=("linux" "least-aged" "proposed")
++
++export HYDRA_FULL_ERROR=1
++
++TEMP_RESULTS_FOLDER="results/0/splitwise_5_17"
++FINAL_RESULTS_FOLDER=$ROOT_EXP_DATA_OUTPUT_FOLDER"experiments"
++BK_RESULTS_FOLDER=$ROOT_EXP_DATA_OUTPUT_FOLDER"bk"
++
++# Create a folder with the current date and time in the BK_RESULTS_FOLDER
++TIMESTAMP=$(date +"%Y-%m-%d_%H-%M-%S")
++BK_TIMESTAMPED_FOLDER="$BK_RESULTS_FOLDER/$TIMESTAMP"
++mkdir -p "$BK_TIMESTAMPED_FOLDER"
++
++# Move all folders in the FINAL_RESULTS_FOLDER to the new backup location
++mv "$FINAL_RESULTS_FOLDER"/* "$BK_TIMESTAMPED_FOLDER"
++
++for vm in "${vm_types[@]}"; do
++  rm -rf 'cpu_core_frequencies.csv'
++  #echo "vm_type: ""$vm"
++  for technique in "${techniques[@]}"; do
++    #echo "technique: ""$technique"
++    sed -i '' "s/^task_allocation_algo=.*/task_allocation_algo=$technique/" cpu_configs.properties
++    cat cpu_configs.properties
++    for type in "${types[@]}"; do
++      for rate in "${rates[@]}"; do
++          #echo "--- type: $type with rate: $rate"
++          echo "---------> " "$type" "trace at rate: " "$rate" "for" "$vm"
++          sh scripts/run_splitwise_ha_cpu.sh "$type" "$rate" "$vm"
++        done
++      done
++    results="$FINAL_RESULTS_FOLDER"/"$vm"/"$technique"
++    mkdir -p "$results"
++    mv "$TEMP_RESULTS_FOLDER"/* "$results"
++  done
++done
+\ No newline at end of file
+diff --git a/scheduler.py b/scheduler.py
+index 7559501..2a52396 100644
+--- a/scheduler.py
++++ b/scheduler.py
+@@ -13,7 +13,7 @@ from executor import Executor, ExecutorType
+ from interconnect import DummyLink
+ from performance_model import get_duration
+ from simulator import clock, schedule_event, cancel_event, reschedule_event
+-from task import Task, TaskType
++from task import Task, TaskType, TokenTask
+ from flow import FlowType
+ 
+ 
+@@ -114,12 +114,20 @@ class Scheduler(ABC):
+         """
+         Spawn an Executor for the request.
+         Executors can logically execute anywhere.
+-        We don't model where they run in simulation.
++        We run the executor on the token instance (less compute-intensive vs prompt instance)
+         """
+         executor = Executor.create(executor_type,
+                                    request,
+                                    self,
+                                    self.executor_overheads)
++        for node in request.nodes.values():
++            if executor.cpu is None:
++                if isinstance(node, Task):
++                    executor.cpu = node.instance.cpu
++            elif isinstance(node, Task) and isinstance(node, TokenTask):
++                """Run executor on the token instance because it is less compute-intensive"""
++                executor.cpu = node.instance.cpu
++
+         self.executors[request.request_id] = executor
+         executor.run()
+ 
+diff --git a/scripts/run_splitwise_aa_cpu.sh b/scripts/run_splitwise_aa_cpu.sh
+new file mode 100755
+index 0000000..af89d59
+--- /dev/null
++++ b/scripts/run_splitwise_aa_cpu.sh
+@@ -0,0 +1,11 @@
++python run.py \
++    applications.0.scheduler=mixed_pool \
++    cluster=half_half-with-cpu \
++    cluster.servers.0.count=40 \
++    cluster.servers.1.count=0 \
++    start_state=splitwise \
++    start_state.prompt.num_instances=27 \
++    start_state.token.num_instances=13 \
++    performance_model=db \
++    trace.filename=rr_conv_80 \
++    seed=0
+diff --git a/scripts/run_splitwise_aa_simple.sh b/scripts/run_splitwise_aa_simple.sh
+new file mode 100644
+index 0000000..40f6be0
+--- /dev/null
++++ b/scripts/run_splitwise_aa_simple.sh
+@@ -0,0 +1,11 @@
++python run.py \
++    applications.0.scheduler=mixed_pool \
++    cluster=half_half \
++    cluster.servers.0.count=40 \
++    cluster.servers.1.count=0 \
++    start_state=splitwise \
++    start_state.prompt.num_instances=27 \
++    start_state.token.num_instances=13 \
++    performance_model=db \
++    trace.filename=test_trace \
++    seed=0
+\ No newline at end of file
+diff --git a/scripts/run_splitwise_ha_cpu.sh b/scripts/run_splitwise_ha_cpu.sh
+new file mode 100644
+index 0000000..82d635d
+--- /dev/null
++++ b/scripts/run_splitwise_ha_cpu.sh
+@@ -0,0 +1,18 @@
++rq_type=$1
++rq_rate=$2
++vm_rq_type=$3
++
++# Splitwise-HH
++#todo refactor filename to reflect HH configuration.
++python run.py \
++    applications.0.scheduler=mixed_pool \
++    cluster=half_half-with-cpu \
++    cluster.servers.0.count=0 \
++    cluster.servers.1.count=22 \
++    cluster.servers.1.sku="$vm_rq_type" \
++    start_state=splitwise-with-cpu \
++    start_state.prompt.num_instances=5 \
++    start_state.token.num_instances=17 \
++    performance_model=db \
++    trace.filename=rr_"$1"_"$2" \
++    seed=0
+\ No newline at end of file
+diff --git a/server.py b/server.py
+index ae8b8b7..4db201d 100644
+--- a/server.py
++++ b/server.py
+@@ -4,6 +4,7 @@ from hydra.utils import instantiate
+ 
+ import utils
+ import hardware_repo
++from processor import CPU
+ 
+ from power_model import get_server_power
+ from simulator import clock, schedule_event, cancel_event, reschedule_event
+@@ -102,6 +103,8 @@ class Server:
+         for processor_cfg in processors_cfg:
+             for n in range(processor_cfg.count):
+                 processor = hardware_repo.get_processor(processor_cfg.name)
++                if isinstance(processor, CPU):
++                    processor.init_fqs(server_id)
+                 processors.append(processor)
+ 
+         # TODO: add better network topology / configuration support
+diff --git a/simulator.py b/simulator.py
+index 9cbae5f..ef52634 100644
+--- a/simulator.py
++++ b/simulator.py
+@@ -1,10 +1,15 @@
++import configparser
+ import heapq
+ import logging
++import os
+ 
+ from collections import defaultdict
++from platform import processor
+ 
+-import utils
++import numpy as np
+ 
++import utils
++from core_power import CPU_CORE_ADJ_INTERVAL
+ 
+ # global simulator that drives the simulation
+ # bad practice, but it works for now
+@@ -100,6 +105,7 @@ class TraceSimulator(Simulator):
+         self.router = router
+         self.arbiter = arbiter
+         logging.info("TraceSimulator initialized")
++        self.last_request_arrival = 0.0
+         self.load_trace()
+ 
+     def load_trace(self):
+@@ -107,8 +113,10 @@ class TraceSimulator(Simulator):
+         Load requests from the trace as arrival events.
+         """
+         for request in self.trace.requests:
++            arrival_timestamp = request.arrival_timestamp
+             self.schedule(request.arrival_timestamp,
+                           lambda request=request: self.router.request_arrival(request))
++            self.last_request_arrival = arrival_timestamp
+ 
+     def run(self):
+         # start simulation by scheduling a cluster run
+@@ -116,11 +124,34 @@ class TraceSimulator(Simulator):
+         self.schedule(0, self.router.run)
+         self.schedule(0, self.arbiter.run)
+ 
++        # add a status entry at the beginning in the cpu usage log files. this is needed to process the collected data.
++        self.cluster.trigger_state_update()
++
++        # schedule periodic monitoring in servers
++        def load_properties(file_path):
++            config = configparser.ConfigParser()
++            # ConfigParser requires section headers, so we add a fake one
++            absolute_directory = os.path.dirname(os.path.abspath(__file__))
++            with open(os.path.join(absolute_directory, file_path), 'r') as file:
++                properties_data = f"[DEFAULT]\n{file.read()}"
++            config.read_string(properties_data)
++            return config['DEFAULT']
++
++        CPU_CONFIGS = load_properties('cpu_configs.properties')
++        if CPU_CONFIGS.get("task_allocation_algo") == "proposed":
++            periodic_interval = 1.0
++            for interval_start in np.arange(0.0, self.last_request_arrival, periodic_interval):
++                for sku in self.cluster.servers:
++                    for server in self.cluster.servers[sku]:
++                        cpu = list(filter(lambda p: p.processor_type.value == 1, server.processors))[0]
++                        self.schedule(interval_start, lambda cpu=cpu: cpu.adjust_sleeping_cores())
++
+         # run simulation
+         super().run()
+         self.logger.info(f"{self.time},end")
+         logging.info(f"TraceSimulator completed at {self.time}")
+ 
++        # below also triggers a status update call, such that each cpu core logs their status at the end of the simulation.
+         self.save_results()
+ 
+     def save_results(self, detailed=True):
+@@ -156,6 +187,22 @@ class TraceSimulator(Simulator):
+             for application_id, result in alloc_results.items():
+                 utils.save_dict_as_csv(result, f"detailed/{application_id}_alloc.csv")
+ 
++        # save CPU core activity
++        server_cpu_usage = self.cluster.cpu_core_usage()
++        for index, cpu_usage in enumerate(server_cpu_usage):
++            name, usage = cpu_usage
++            utils.save_dict_as_csv(usage, f"cpu_usage/cpu_usage_{name}_{index}.csv")
++
++        task_logs = self.cluster.task_logs()
++        for index, log in enumerate(task_logs):
++            machine_name, data = log
++            utils.save_dict_as_csv(data, f"cpu_usage/task_log_{machine_name}_{index}.csv")
++
++        slp_mgt_logs = self.cluster.sleep_mgt_logs()
++        for index, log in enumerate(slp_mgt_logs):
++            machine_name, data = log
++            utils.save_dict_as_csv(data, f"cpu_usage/slp_mgt_log_{machine_name}_{index}.csv")
++
+ 
+ # Convenience functions for simulator object
+ 
+diff --git a/start_state.py b/start_state.py
+index ce0e416..7143303 100644
+--- a/start_state.py
++++ b/start_state.py
+@@ -4,6 +4,9 @@ Utility functions to initialize the Cluster with a starting state.
+ 
+ import logging
+ 
++from joblib.externals.cloudpickle import instance
++from pandas.core.computation.expressions import where
++
+ from model import ModelParallelism
+ from simulator import clock, schedule_event, cancel_event, reschedule_event
+ 
+@@ -70,16 +73,25 @@ def splitwise(start_state_cfg, cluster, applications, **kwargs):
+         # allocate n_prompt instance of prompt
+         all_servers = [server for sku_name in servers for server in servers[sku_name]]
+         for server in all_servers[:n_prompts]:
+-            for proc_id in range(0, len(server.processors), prompt_parallelism.tensor_parallelism):
++            gpus = [processor for processor in server.processors if processor.processor_type.value == 2]
++            cpus = [processor for processor in server.processors if processor.processor_type.value == 1]
++            for proc_id in range(0, len(gpus), prompt_parallelism.tensor_parallelism):
++                # allocate instance processors
++                instance_processors = get_instance_processors(proc_id, proc_id+prompt_parallelism.tensor_parallelism,
++                                                              cpus, gpus)
+                 allocator.start_spin_up_instance(instance_cfg=prompt_cfg,
+-                                                 processors=server.processors[proc_id:proc_id+prompt_parallelism.tensor_parallelism],
++                                                 processors=instance_processors,
+                                                  parallelism=prompt_parallelism,
+                                                  pre_start=True,
+                                                  tag="prompt")
+         for server in all_servers[n_prompts:n_prompts+n_tokens]:
+-            for proc_id in range(0, len(server.processors), token_parallelism.tensor_parallelism):
++            gpus = [processor for processor in server.processors if processor.processor_type.value == 2]
++            cpus = [processor for processor in server.processors if processor.processor_type.value == 1]
++            for proc_id in range(0, len(gpus), token_parallelism.tensor_parallelism):
++                instance_processors = get_instance_processors(proc_id, proc_id+token_parallelism.tensor_parallelism,
++                                                              cpus, gpus)
+                 allocator.start_spin_up_instance(instance_cfg=token_cfg,
+-                                                 processors=server.processors[proc_id:proc_id+token_parallelism.tensor_parallelism],
++                                                 processors=instance_processors,
+                                                  parallelism=token_parallelism,
+                                                  pre_start=True,
+                                                  tag="token")
+@@ -89,21 +101,34 @@ def splitwise(start_state_cfg, cluster, applications, **kwargs):
+         token_instances = token_cfg.instance_names
+         for sku_name in servers:
+             for server in servers[sku_name]:
++                gpus = [processor for processor in server.processors if processor.processor_type.value == 2]
++                cpus = [processor for processor in server.processors if processor.processor_type.value == 1]
+                 if sku_name in prompt_instances:
+                     # allocate as many prompt instances as possible
+-                    for proc_id in range(0, len(server.processors), prompt_parallelism.tensor_parallelism):
++                    for proc_id in range(0, len(gpus), prompt_parallelism.tensor_parallelism):
++                        instance_processors = get_instance_processors(proc_id,
++                                                                      proc_id + prompt_parallelism.tensor_parallelism,
++                                                                      cpus, gpus)
+                         allocator.start_spin_up_instance(instance_cfg=prompt_cfg,
+-                                                         processors=server.processors[proc_id:proc_id+prompt_parallelism.tensor_parallelism],
++                                                         processors=instance_processors,
+                                                          parallelism=prompt_parallelism,
+                                                          pre_start=True,
+                                                          tag="prompt")
+                 elif sku_name in token_instances:
+                     # allocate as many token instances as possible
+-                    for proc_id in range(0, len(server.processors), token_parallelism.tensor_parallelism):
++                    for proc_id in range(0, len(gpus), token_parallelism.tensor_parallelism):
++                        instance_processors = get_instance_processors(proc_id,
++                                                                      proc_id + token_parallelism.tensor_parallelism,
++                                                                      cpus, gpus)
+                         allocator.start_spin_up_instance(instance_cfg=token_cfg,
+-                                                         processors=server.processors[proc_id:proc_id+token_parallelism.tensor_parallelism],
++                                                         processors=instance_processors,
+                                                          parallelism=token_parallelism,
+                                                          pre_start=True,
+                                                          tag="token")
+                 else:
+                     raise ValueError(f"Unsupported sku_name: {sku_name}")
++
++
++def get_instance_processors(gpu_start_idx, gpu_end_idx, cpus, gpus):
++    instance_processors = cpus + gpus[gpu_start_idx:gpu_start_idx + gpu_end_idx]
++    return instance_processors
+diff --git a/task.py b/task.py
+index d6f8d83..4706e22 100644
+--- a/task.py
++++ b/task.py
+@@ -144,7 +144,12 @@ class PromptTask(Task):
+ 
+         # ensure that we processed and generated all tokens
+         assert self.processed_tokens == self.prompt_size
+-        assert self.request.processed_tokens == self.request.prompt_size
++
++        try:
++            assert self.request.processed_tokens == self.request.prompt_size
++        except AssertionError:
++            logging.error(f"clk: {clock()}: Request {self.request.request_id} has processed tokens {self.request.processed_tokens} != prompt size {self.request.prompt_size}")
++
+         assert self.generated_tokens == 1
+ 
+         # manage memory
+@@ -208,9 +213,17 @@ class TokenTask(Task):
+         # ensure that we generated all tokens
+         assert self.processed_tokens == self.token_size
+         assert self.generated_tokens == self.token_size
+-        assert self.request.generated_tokens == self.request.token_size
+-        assert self.request.processed_tokens == self.request.prompt_size + \
++
++        try:
++            assert self.request.generated_tokens == self.request.token_size
++        except AssertionError:
++            logging.error(f"clk: {clock()}: Request {self.request.request_id} has generated tokens {self.request.generated_tokens} != token size {self.request.token_size}")
++
++        try:
++            assert self.request.processed_tokens == self.request.prompt_size + \
+                                                 self.request.token_size - 1
++        except AssertionError:
++            logging.error(f"clk: {clock()}: Request {self.request.request_id} has processed tokens {self.request.processed_tokens} != prompt size {self.request.prompt_size} + token size {self.request.token_size} - 1")
+ 
+         # manage memory
+         if self.cleanup_memory:
