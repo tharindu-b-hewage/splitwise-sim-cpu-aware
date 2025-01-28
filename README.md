@@ -80,3 +80,14 @@ plots in the ```results_cpu``` folder.
 #### Reference
 
 If you use SplitwiseSimCPUCarbon in your work, please cite the accompanying paper:
+```
+@misc{hewage2025agingawarecpucoremanagement,
+      title={Aging-aware CPU Core Management for Embodied Carbon Amortization in Cloud LLM Inference}, 
+      author={Tharindu B. Hewage and Shashikant Ilager and Maria Rodriguez Read and Rajkumar Buyya},
+      year={2025},
+      eprint={2501.15829},
+      archivePrefix={arXiv},
+      primaryClass={cs.DC},
+      url={https://arxiv.org/abs/2501.15829}, 
+}
+```
